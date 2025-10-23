@@ -33,6 +33,7 @@ static uint8_t num_successful_cards = 0;
 static uint8_t num_missing_cards = 0;
 static uint8_t num_cards_with_mount_errors = 0;
 static uint8_t num_cards_with_file_errors = 0;
+static uint8_t num_cards_with_disk_errors = 0;
 
 /* Private function declarations -------------------------------------------------------------------------------------*/
 
@@ -73,12 +74,14 @@ int main(void)
 
     for (int slot = 0; slot < SD_CARD_BANK_CTL_NUM_CARDS; slot++)
     {
+        int actualSlot = abs(slot-5);  //actual slot number for hardware; the description is reversed
+
         printf("[CHECKING]--> SD card %d\n", slot);
 
         // this delay is just to slow it down so a human can see what's happening
         MXC_Delay(1000000);
 
-        sd_card_bank_ctl_enable_slot(slot);
+        sd_card_bank_ctl_enable_slot(actualSlot);
 
         sd_card_bank_ctl_read_and_cache_detect_pins();
 
@@ -113,6 +116,19 @@ int main(void)
             sd_card_bank_ctl_disable_all();
             blink_n_times(STATUS_LED_COLOR_RED, 10);
             continue;
+        }
+
+        QWORD diskSize = sd_card_disk_size_bytes();
+        if(0 != diskSize)
+        {
+            printf("[SUCCESS]--> Card %d disk size is %llu bytes\n", slot, diskSize);
+            QWORD diskFree = sd_card_free_space_bytes();
+            printf("[SUCCESS]--> Card %d disk free space is %llu bytes\n", slot, diskFree);
+        }
+        else
+        {
+            printf("[ERROR]--> Card %d disk size not accessible\n", slot);
+            num_cards_with_disk_errors += 1;
         }
 
         // open a file
@@ -157,6 +173,7 @@ int main(void)
     printf("\n******************* SUMMARY ******************************** \n");
     printf("Cards detected:               %d\n", SD_CARD_BANK_CTL_NUM_CARDS - num_missing_cards);
     printf("Cards with init/mount errors: %d\n", num_cards_with_mount_errors);
+    printf("Cards with disk access errors: %d\n", num_cards_with_disk_errors);
     printf("Cards with file errors:       %d\n", num_cards_with_file_errors);
     printf("Cards all successfull:        %d\n", num_successful_cards);
 

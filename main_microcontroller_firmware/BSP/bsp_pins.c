@@ -294,10 +294,11 @@ const mxc_gpio_cfg_t bsp_pins_rtc_int_cfg = {
 };
 
 /* BLE module pins ---------------------------------------------------------------------------------------------------*/
-//Swap with user_push_button PIN_5 instead of PIN_8
+//Swap with user_push_button PIN_5 instead of PIN_8 for Version 1 of UI Board
+//For Version 2 of UI Board, change back to PIN_5 for user pushbutton and PIN_8 for BLE enable
 const mxc_gpio_cfg_t bsp_pins_ble_en_pushbutton_cfg = {
     .port = MXC_GPIO0,
-    .mask = MXC_GPIO_PIN_5,  
+    .mask = MXC_GPIO_PIN_8,  
     .pad = MXC_GPIO_PAD_PULL_UP,
     .func = MXC_GPIO_FUNC_IN,
     .vssel = MXC_GPIO_VSSEL_VDDIOH,
@@ -333,10 +334,11 @@ const mxc_gpio_cfg_t bsp_pins_ldo_en_cfg = {
 };
 
 /* User pushbutton pin -----------------------------------------------------------------------------------------------*/
-//Swap with BLE PIN_8 instead of PIN_5
+//Swap with BLE PIN_8 instead of PIN_5 for Version 1 of UI Board
+//For Version 2 of UI Board, change back to PIN_5 for user pushbutton and PIN_8 for BLE enable
 const mxc_gpio_cfg_t bsp_pins_user_pushbutton_cfg = {
     .port = MXC_GPIO0,
-    .mask = MXC_GPIO_PIN_8,
+    .mask = MXC_GPIO_PIN_5,
     .pad = MXC_GPIO_PAD_PULL_UP,
     .func = MXC_GPIO_FUNC_IN,
     .vssel = MXC_GPIO_VSSEL_VDDIOH,

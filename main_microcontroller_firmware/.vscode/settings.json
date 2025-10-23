@@ -71,7 +71,6 @@
     "files.associations": {
         "data_converters.h": "c",
         "mxc_delay.h": "c",
-        "bsp_status_led.h": "c",
-        "tmr.h": "c"
+        "bsp_status_led.h": "c"
     }
 }

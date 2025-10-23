@@ -223,6 +223,11 @@ int audio_dma_init()
 
 int audio_dma_start()
 {
+    //Re-initialize the big_dma_buff arrays
+    memset(big_dma_buff_ch0, 0, sizeof(big_dma_buff_ch0));
+    memset(big_dma_buff_ch1, 0, sizeof(big_dma_buff_ch1));
+
+
     if (dma_channel_0_idx < 0) // negative result indicates an error
     {
         return dma_channel_0_idx;

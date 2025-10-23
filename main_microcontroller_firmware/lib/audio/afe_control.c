@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "mxc_device.h"
+#include "mxc_delay.h"
 
 #include "afe_control.h"
 #include "board.h"
@@ -130,12 +131,15 @@ int afe_control_enable(Audio_Channel_t channel)
         channel_0_is_enabled = true;
         preamp_0_is_enabled = true;
         gpio_write_pin(&bsp_pins_afe_ch0_en_cfg, true);
+        MXC_Delay(MXC_DELAY_MSEC(1000));; // wait 1000ms for the common mode ref and opamps to power up
     }
     else if (channel == AUDIO_CHANNEL_1)
     {
         channel_1_is_enabled = true;
         preamp_1_is_enabled = true;
         gpio_write_pin(&bsp_pins_afe_ch1_en_cfg, true);
+        MXC_Delay(MXC_DELAY_MSEC(1000));; // wait 1000ms for the common mode ref and opamps to power up
+
     }
     else
     {

@@ -309,7 +309,9 @@ int configure_data_spi_bus_to_receive_data_from_adc(mxc_spi_regs_t *hspi)
     {
         return res;
     }
-    if ((res = MXC_SPI_SetMode(hspi, SPI_MODE_1)) != E_NO_ERROR)
+
+    //Bob found that SPI_MODE_2 works better than SPI_MODE_1 for audio quality.  Signal from  ADC is not getting distorted.
+    if ((res = MXC_SPI_SetMode(hspi, SPI_MODE_2)) != E_NO_ERROR)
     {
         return res;
     }

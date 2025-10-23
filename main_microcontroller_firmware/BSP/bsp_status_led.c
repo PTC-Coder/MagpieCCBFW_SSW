@@ -26,13 +26,13 @@ void status_led_set(Status_LED_Color_t color, bool state)
     switch (color)
     {
     case STATUS_LED_COLOR_RED:
-        gpio_write_pin(&bsp_pins_red_led_cfg, !state);    //update to state instead of !state since we want LED to match polarity now (pull low = off)
+        gpio_write_pin(&bsp_pins_red_led_cfg, state);    //update to state instead of !state since we want LED to match polarity now (pull low = off)
         break;
     case STATUS_LED_COLOR_GREEN:
-        gpio_write_pin(&bsp_pins_green_led_cfg, !state);
+        gpio_write_pin(&bsp_pins_green_led_cfg, state);
         break;
     case STATUS_LED_COLOR_BLUE:
-        gpio_write_pin(&bsp_pins_blue_led_cfg, !state);
+        gpio_write_pin(&bsp_pins_blue_led_cfg, state);
         break;
     default:
         break;

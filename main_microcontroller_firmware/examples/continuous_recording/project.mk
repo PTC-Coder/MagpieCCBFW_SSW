@@ -12,3 +12,4 @@ FIRST_SET_RTC = 1
 # all common makefile commands which apply to all the demos are in this makefile
 #-----------------------------------------------------------------------------------------------------------------------
 include ../common_makefile.mk
+PROJ_CFLAGS += -DSDHC_CLK_FREQ=23750000

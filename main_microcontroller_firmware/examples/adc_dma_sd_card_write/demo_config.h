@@ -20,10 +20,10 @@
 
 // comment or uncomment sample rates to add them to the test
 const Audio_Sample_Rate_t demo_sample_rates_to_test[] = {
-    AUDIO_SAMPLE_RATE_24kHz,
-    AUDIO_SAMPLE_RATE_48kHz,
-    AUDIO_SAMPLE_RATE_96kHz,
-    AUDIO_SAMPLE_RATE_192kHz,
+    // AUDIO_SAMPLE_RATE_24kHz,
+    // AUDIO_SAMPLE_RATE_48kHz,
+    // AUDIO_SAMPLE_RATE_96kHz,
+    // AUDIO_SAMPLE_RATE_192kHz,
     AUDIO_SAMPLE_RATE_384kHz,
 };
 
@@ -40,7 +40,7 @@ const uint32_t DEMO_CONFIG_NUM_BIT_DEPTHS_TO_TEST = sizeof(demo_bit_depths_to_te
 // comment of uncomment mono/stereo variations to add them to the test
 const Wave_Header_Num_Channels_t demo_num_channel_variations_to_test[] = {
     WAVE_HEADER_MONO,
-    WAVE_HEADER_STEREO,
+    // WAVE_HEADER_STEREO,
 };
 
 const uint32_t DEMO_CONFIG_NUM_CHANNEL_VARIATIONS_TO_TEST = sizeof(demo_num_channel_variations_to_test) / sizeof(demo_num_channel_variations_to_test)[0];
