@@ -6,10 +6,10 @@
 TERMINAL_IO_VARIANT = TERMINAL_IO_USE_SEGGER_RTT
 # TERMINAL_IO_VARIANT = TERMINAL_IO_USE_CONSOLE_UART
 
-FIRST_SET_RTC = 1
+#FIRST_SET_RTC = 1
+PROJ_CFLAGS += -DSDHC_CLK_FREQ=23750000
 
 #-----------------------------------------------------------------------------------------------------------------------
 # all common makefile commands which apply to all the demos are in this makefile
 #-----------------------------------------------------------------------------------------------------------------------
 include ../common_makefile.mk
-PROJ_CFLAGS += -DSDHC_CLK_FREQ=23750000

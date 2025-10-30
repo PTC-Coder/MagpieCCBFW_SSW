@@ -105,16 +105,25 @@ const struct tm ds3231_dateTimeDefault = {
 
 static bool isContinuousRecording = false; //Flag to indicate if the recording is continuous or not
 
+// Non-blocking LED blink variables
+static uint32_t led_blink_start_time = 0;
+static bool led_blink_active = false;
+
 /* Public function definitions ---------------------------------------------------------------------------------------*/
 int main(void)
 {
 #ifdef TERMINAL_IO_USE_CONSOLE_UART
     bsp_console_uart_init();
 #endif
+    LED_cascade_right();
+    LED_cascade_right();
+
 
     MXC_ICC_Enable();
 
     initialize_system();
+
+
 
     setup_user_pushbutton_interrupt();
 
@@ -294,7 +303,7 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 #define MAX_WORKSPACE_NEEDED_FOR_ENDIAN_SWAP_AND_Q31_EXPANSION (AUDIO_DMA_BUFF_LEN_IN_SAMPS * DATA_CONVERTERS_Q31_SIZE_IN_BYTES * 2)
 
 // tradeoff between memory and current consumption, bigger buffers reduces current by doing fewer, larger, SD writes
-#define FULL_BYTE_POOL_SIZE (MAX_WORKSPACE_NEEDED_FOR_ENDIAN_SWAP_AND_Q31_EXPANSION * 3)
+#define FULL_BYTE_POOL_SIZE (MAX_WORKSPACE_NEEDED_FOR_ENDIAN_SWAP_AND_Q31_EXPANSION * 4)   //Orginally *3
 
     /*
      This is a single pool of memory which we use to do all the processing, we reserve a small potion at the start of
@@ -356,6 +365,7 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
         if (audio_dma_overrun_occured(AUDIO_CHANNEL_0) || audio_dma_overrun_occured(AUDIO_CHANNEL_1))
         {
             printf("[ERROR]--> Audio DMA overrrun\n");
+            wav_header_add_metadata("Error", "DMA Overrun");
             //error_handler(STATUS_LED_COLOR_BLUE);
               //error_handler(STATUS_LED_COLOR_BLUE);
             num_dma_blocks_consumed = num_dma_blocks_in_the_file;  // stop recording this run and exit the loop
@@ -363,6 +373,9 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
             audio_dma_clear_overrun(AUDIO_CHANNEL_1);
             //we'll start over with the net
             break;
+            // audio_dma_clear_overrun(AUDIO_CHANNEL_0);
+            // audio_dma_clear_overrun(AUDIO_CHANNEL_1);
+            // continue;  //experiment to just continue
         }
 
         if (audio_dma_num_buffers_available(AUDIO_CHANNEL_0) > 0 && audio_dma_num_buffers_available(AUDIO_CHANNEL_1) > 0)
@@ -504,12 +517,26 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 
             num_dma_blocks_consumed += 1;
 
-            //Blink Green LED while recording
-            if(num_dma_blocks_consumed % 120 == 0)
+            //Blink Green LED while recording (non-blocking)
+            static uint32_t led_blink_counter = 0;
+            static bool led_is_on = false;
+            
+            if(num_dma_blocks_consumed % 120 == 0 && !led_is_on)
             {                
-                status_led_set(STATUS_LED_COLOR_GREEN, TRUE); // turn the green LED back on
-                MXC_Delay(MXC_DELAY_MSEC(25));
-                status_led_set(STATUS_LED_COLOR_GREEN, FALSE);
+                status_led_set(STATUS_LED_COLOR_GREEN, TRUE);
+                led_is_on = true;
+                led_blink_counter = 0;
+            }
+            
+            if(led_is_on)
+            {
+                led_blink_counter++;
+                // Turn off after processing a few more blocks (~25ms worth)
+                if(led_blink_counter >= 3) // Adjust this value as needed
+                {
+                    status_led_set(STATUS_LED_COLOR_GREEN, FALSE);
+                    led_is_on = false;
+                }
             }
         }
         
