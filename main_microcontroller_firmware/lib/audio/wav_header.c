@@ -2,6 +2,8 @@
 
 #include "wav_header.h"
 #include <stdint.h>
+#include <string.h>
+#include <stdio.h>
 
 /* Private defines ---------------------------------------------------------------------------------------------------*/
 
@@ -12,7 +14,29 @@
 // Always use PCM format for now. If we implement compression in the future this may change
 #define WAVE_HEADER_FMT_TAG_PCM (1)
 
+// Header size expanded to 4 sectors (2048 bytes) for metadata storage
+#define WAVE_HEADER_SECTOR_SIZE (512)
+#define WAVE_HEADER_NUM_SECTORS (4)
+#define WAVE_HEADER_TOTAL_SIZE (WAVE_HEADER_SECTOR_SIZE * WAVE_HEADER_NUM_SECTORS)
+#define WAVE_HEADER_CORE_SIZE (44)
+#define WAVE_HEADER_METADATA_SIZE (WAVE_HEADER_TOTAL_SIZE - WAVE_HEADER_CORE_SIZE)
+
+// Key-value pair constants
+#define MAX_KEY_LENGTH (32)
+#define MAX_VALUE_LENGTH (64)
+#define MAX_METADATA_PAIRS (20)
+
 /* Private types -----------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief A structure for holding key-value metadata pairs
+ */
+typedef struct __attribute__((packed))
+{
+    char key[MAX_KEY_LENGTH];
+    char value[MAX_VALUE_LENGTH];
+    uint8_t valid; // 1 if this entry is valid, 0 if empty
+} Metadata_Pair_t;
 
 /**
  * @brief A structure for holding wav file header information is represented here.
@@ -34,10 +58,14 @@ typedef struct __attribute__((packed))
     uint16_t bits_per_sample;  /* number of bits per sample */
     char data[4];              /* always the string "data" */
     uint32_t data_length;      /* data length in bytes (file_length - the length of this struct) */
-    char pad_to_sector[512-44]; // add 0-valued bytes to sector boundary (512).
-    // Note that (512-44) is divisible by both 2 and 3, so the
-    // word alignment for 16 bits (2 bytes) and 24 bits (3 bytes) will be correct once
-    // the data appears starting at 512
+    
+    // Metadata section - key-value pairs for custom data
+    uint32_t metadata_version; /* Version of metadata format */
+    uint32_t metadata_count;   /* Number of valid metadata pairs */
+    Metadata_Pair_t metadata_pairs[MAX_METADATA_PAIRS];
+    
+    // Pad to 4-sector boundary (2048 bytes total)
+    char pad_to_sectors[WAVE_HEADER_METADATA_SIZE - sizeof(uint32_t) - sizeof(uint32_t) - (sizeof(Metadata_Pair_t) * MAX_METADATA_PAIRS)];
 } Wave_Header_t;
 
 /* Private variables -------------------------------------------------------------------------------------------------*/
@@ -52,7 +80,10 @@ static Wave_Header_t wave_header = {
     .fmt_chunk_size = WAVE_HEADER_FMT_CHUNK_SIZE,
     .fmt_tag = WAVE_HEADER_FMT_TAG_PCM,
     .data = {'d', 'a', 't', 'a'},
-    .pad_to_sector = {0}
+    .metadata_version = 1,
+    .metadata_count = 0,
+    .metadata_pairs = {{0}},
+    .pad_to_sectors = {0}
 };
 
 const uint32_t HEADER_LENGTH = sizeof(wave_header);
@@ -79,4 +110,136 @@ char *wav_header_get_header()
 uint32_t wav_header_get_header_length()
 {
     return HEADER_LENGTH;
+}
+
+Wav_Metadata_Result_t wav_header_add_metadata(const char *key, const char *value)
+{
+    // Validate input parameters
+    if (!key || !value) {
+        return WAV_METADATA_ERROR_INVALID_PARAM;
+    }
+    
+    if (strlen(key) >= MAX_KEY_LENGTH || strlen(value) >= MAX_VALUE_LENGTH) {
+        return WAV_METADATA_ERROR_TOO_LONG;
+    }
+    
+    // Check if key already exists - if so, update it
+    for (uint32_t i = 0; i < wave_header.metadata_count; i++) {
+        if (wave_header.metadata_pairs[i].valid && 
+            strncmp(wave_header.metadata_pairs[i].key, key, MAX_KEY_LENGTH) == 0) {
+            // Update existing key
+            strncpy(wave_header.metadata_pairs[i].value, value, MAX_VALUE_LENGTH - 1);
+            wave_header.metadata_pairs[i].value[MAX_VALUE_LENGTH - 1] = '\0';
+            return WAV_METADATA_UPDATED;
+        }
+    }
+    
+    // Check if we have space for more metadata
+    if (wave_header.metadata_count >= MAX_METADATA_PAIRS) {
+        return WAV_METADATA_ERROR_NO_SPACE;
+    }
+    
+    // Add new key-value pair
+    uint32_t index = wave_header.metadata_count;
+    strncpy(wave_header.metadata_pairs[index].key, key, MAX_KEY_LENGTH - 1);
+    wave_header.metadata_pairs[index].key[MAX_KEY_LENGTH - 1] = '\0';
+    
+    strncpy(wave_header.metadata_pairs[index].value, value, MAX_VALUE_LENGTH - 1);
+    wave_header.metadata_pairs[index].value[MAX_VALUE_LENGTH - 1] = '\0';
+    
+    wave_header.metadata_pairs[index].valid = 1;
+    wave_header.metadata_count++;
+    
+    return WAV_METADATA_SUCCESS;
+}
+
+const char* wav_header_get_metadata(const char *key)
+{
+    if (!key) {
+        return NULL;
+    }
+    
+    for (uint32_t i = 0; i < wave_header.metadata_count; i++) {
+        if (wave_header.metadata_pairs[i].valid && 
+            strncmp(wave_header.metadata_pairs[i].key, key, MAX_KEY_LENGTH) == 0) {
+            return wave_header.metadata_pairs[i].value;
+        }
+    }
+    
+    return NULL; // Key not found
+}
+
+Wav_Metadata_Result_t wav_header_remove_metadata(const char *key)
+{
+    if (!key) {
+        return WAV_METADATA_ERROR_INVALID_PARAM;
+    }
+    
+    for (uint32_t i = 0; i < wave_header.metadata_count; i++) {
+        if (wave_header.metadata_pairs[i].valid && 
+            strncmp(wave_header.metadata_pairs[i].key, key, MAX_KEY_LENGTH) == 0) {
+            
+            // Mark as invalid
+            wave_header.metadata_pairs[i].valid = 0;
+            memset(wave_header.metadata_pairs[i].key, 0, MAX_KEY_LENGTH);
+            memset(wave_header.metadata_pairs[i].value, 0, MAX_VALUE_LENGTH);
+            
+            // Compact the array by moving later entries forward
+            for (uint32_t j = i; j < wave_header.metadata_count - 1; j++) {
+                wave_header.metadata_pairs[j] = wave_header.metadata_pairs[j + 1];
+            }
+            
+            // Clear the last entry
+            memset(&wave_header.metadata_pairs[wave_header.metadata_count - 1], 0, sizeof(Metadata_Pair_t));
+            wave_header.metadata_count--;
+            
+            return WAV_METADATA_SUCCESS;
+        }
+    }
+    
+    return WAV_METADATA_ERROR_NOT_FOUND;
+}
+
+void wav_header_clear_metadata()
+{
+    wave_header.metadata_count = 0;
+    memset(wave_header.metadata_pairs, 0, sizeof(wave_header.metadata_pairs));
+}
+
+uint32_t wav_header_get_metadata_count()
+{
+    return wave_header.metadata_count;
+}
+
+void wav_header_debug_sizes()
+{
+    printf("WAV Header Size Debug:\n");
+    printf("  Core header size: %d bytes\n", WAVE_HEADER_CORE_SIZE);
+    printf("  Total header size: %d bytes\n", WAVE_HEADER_TOTAL_SIZE);
+    printf("  Metadata section size: %d bytes\n", WAVE_HEADER_METADATA_SIZE);
+    printf("  Actual struct size: %d bytes\n", (int)sizeof(Wave_Header_t));
+    printf("  Metadata version size: %d bytes\n", (int)sizeof(uint32_t));
+    printf("  Metadata count size: %d bytes\n", (int)sizeof(uint32_t));
+    printf("  Metadata pairs size: %d bytes\n", (int)(sizeof(Metadata_Pair_t) * MAX_METADATA_PAIRS));
+    printf("  Padding size: %d bytes\n", (int)(WAVE_HEADER_METADATA_SIZE - sizeof(uint32_t) - sizeof(uint32_t) - (sizeof(Metadata_Pair_t) * MAX_METADATA_PAIRS)));
+}
+
+const char* wav_metadata_result_to_string(Wav_Metadata_Result_t result)
+{
+    switch (result) {
+        case WAV_METADATA_SUCCESS:
+            return "Success";
+        case WAV_METADATA_UPDATED:
+            return "Updated existing key";
+        case WAV_METADATA_ERROR_NO_SPACE:
+            return "No space available";
+        case WAV_METADATA_ERROR_INVALID_PARAM:
+            return "Invalid parameter";
+        case WAV_METADATA_ERROR_TOO_LONG:
+            return "Key or value too long";
+        case WAV_METADATA_ERROR_NOT_FOUND:
+            return "Key not found";
+        default:
+            return "Unknown error";
+    }
 }

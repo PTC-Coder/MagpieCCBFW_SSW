@@ -59,6 +59,19 @@ typedef enum
 } Wave_Header_Num_Channels_t;
 
 /**
+ * @brief Enumerated return codes for metadata operations
+ */
+typedef enum
+{
+    WAV_METADATA_SUCCESS = 0,           /** Operation completed successfully */
+    WAV_METADATA_UPDATED = 1,           /** Existing key was updated successfully */
+    WAV_METADATA_ERROR_NO_SPACE = -1,   /** No space available for more metadata pairs */
+    WAV_METADATA_ERROR_INVALID_PARAM = -2, /** Invalid parameters (NULL key or value) */
+    WAV_METADATA_ERROR_TOO_LONG = -3,   /** Key or value exceeds maximum length */
+    WAV_METADATA_ERROR_NOT_FOUND = -4,  /** Key not found during removal operation */
+} Wav_Metadata_Result_t;
+
+/**
  * @brief A structure for holding the configurable wave header attributes is represented here.
  */
 typedef struct
@@ -97,5 +110,67 @@ char *wav_header_get_header(void);
  * @retval the length of the WAV header in bytes.
  */
 uint32_t wav_header_get_header_length(void);
+
+/**
+ * @brief `wav_header_add_metadata(key, value)` adds or updates a key-value pair in the WAV header metadata section.
+ *
+ * @param key The metadata key (max 31 characters)
+ * @param value The metadata value (max 63 characters)
+ *
+ * @retval WAV_METADATA_SUCCESS: New key-value pair added successfully
+ *         WAV_METADATA_UPDATED: Existing key was updated successfully
+ *         WAV_METADATA_ERROR_NO_SPACE: No space available for more metadata pairs
+ *         WAV_METADATA_ERROR_INVALID_PARAM: Invalid parameters (NULL key or value)
+ *         WAV_METADATA_ERROR_TOO_LONG: Key or value exceeds maximum length
+ */
+Wav_Metadata_Result_t wav_header_add_metadata(const char *key, const char *value);
+
+/**
+ * @brief `wav_header_get_metadata(key)` retrieves the value for a given key from the metadata section.
+ *
+ * @param key The metadata key to look up
+ *
+ * @retval Pointer to the value string if found, NULL if key not found or invalid parameter
+ */
+const char* wav_header_get_metadata(const char *key);
+
+/**
+ * @brief `wav_header_remove_metadata(key)` removes a key-value pair from the metadata section.
+ *
+ * @param key The metadata key to remove
+ *
+ * @retval WAV_METADATA_SUCCESS: Key removed successfully
+ *         WAV_METADATA_ERROR_INVALID_PARAM: Invalid parameter (NULL key)
+ *         WAV_METADATA_ERROR_NOT_FOUND: Key not found
+ */
+Wav_Metadata_Result_t wav_header_remove_metadata(const char *key);
+
+/**
+ * @brief `wav_header_clear_metadata()` removes all metadata key-value pairs.
+ *
+ * @post All metadata pairs are cleared from the header
+ */
+void wav_header_clear_metadata(void);
+
+/**
+ * @brief `wav_header_get_metadata_count()` returns the number of metadata pairs currently stored.
+ *
+ * @retval The number of valid metadata key-value pairs
+ */
+uint32_t wav_header_get_metadata_count(void);
+
+/**
+ * @brief `wav_header_debug_sizes()` prints debug information about header sizes (for development/debugging).
+ */
+void wav_header_debug_sizes(void);
+
+/**
+ * @brief `wav_metadata_result_to_string(result)` converts a metadata result enum to a human-readable string.
+ *
+ * @param result The metadata operation result to convert
+ *
+ * @retval Pointer to a string describing the result
+ */
+const char* wav_metadata_result_to_string(Wav_Metadata_Result_t result);
 
 #endif /* WAV_HEADER_H_ */
