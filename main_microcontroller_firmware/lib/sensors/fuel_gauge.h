@@ -14,6 +14,25 @@
 /* Includes ----------------------------------------------------------------------------------------------------------*/
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
+
+/* Data Structures ---------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Structure to hold fuel gauge measurement data
+ */
+typedef struct {
+    double vcell_voltage;      // Instantaneous cell voltage in V
+    double avg_vcell_voltage;  // Average cell voltage in V
+    double current_ma;         // Instantaneous current in mA
+    double avg_current_ma;     // Average current in mA
+    double qh_mah;            // Coulomb counter in mAh
+    uint16_t vcell_raw;       // Raw VCell register value
+    uint16_t avg_vcell_raw;   // Raw AvgVCell register value
+    uint16_t current_raw;     // Raw Current register value
+    uint16_t avg_current_raw; // Raw AvgCurrent register value
+    uint16_t qh_raw;          // Raw QH register value
+} fuel_gauge_data_t;
 
 
 
@@ -39,8 +58,10 @@ void max17261_clear_por_bit(void);
 /**
  * @brief    max17261_wait_dnr(). Function to wait for the MAX1726x to complete
  *           its startup operations. See "MAX1726x Software Implementation Guide" for details
+ * @param[in] timeout_ms. Timeout in milliseconds (default 2000ms if 0 is passed)
+ * @return   1 if successful (DNR cleared), 0 if timeout occurred
  ****************************************************************************/
-void max17261_wait_dnr(void);
+int max17261_wait_dnr(uint32_t timeout_ms);
 
 
 
@@ -59,42 +80,58 @@ uint8_t max17261_read_repsoc(void);
  * @return   the 2-byte register data as a uint16_t.
  ****************************************************************************/
 uint16_t max17261_read_repcap(void);
+
 /**
- * @brief    max17261_read_tte(). This function the TTE register data
- *           as described in Software Implementation guide. It gives how much milli amp
- *           hours is left on the battery. This function is currently not used or tested.
- * @param[out]  *hrs. Hours
- * @param[out]  *mins. Minutes
- * @param[out]  *secs. Seconds
+ * @brief    max17261_read_designcap(). This function reads the DesignCap register
+ *           to check the configured battery capacity.
+ * @return   the 2-byte register data as a uint16_t.
  ****************************************************************************/
-void max17261_read_tte(uint8_t *hrs, uint8_t *mins, uint8_t *secs);
+uint16_t max17261_read_designcap(void);
+
+/**
+ * @brief    max17261_reset_qh(). This function resets the QH register (coulomb counter)
+ *           to zero. Use with caution as this affects fuel gauge accuracy.
+ * @return   E_SUCCESS if successful, E_FAIL if failed.
+ ****************************************************************************/
+int max17261_reset_qh(void);
 
 
+/**
+ * @brief    max17261_read_tte(). This function reads the TTE register data
+ *           as described in Software Implementation guide. It returns the time
+ *           to empty in seconds as a time_t value.
+ * @return   double representing hours until battery is empty
+ ****************************************************************************/
+double max17261_read_tte(void);
+
+/**
+ * @brief    max17261_calculate_tte_manual(). This function calculates TTE manually
+ *           using RepCap and AvgCurrent for large batteries where the TTE register
+ *           saturates at its maximum value (4.27 days).
+ * @return   double representing hours until battery is empty
+ ****************************************************************************/
+double max17261_calculate_tte_manual(void);
+
+/**
+ * @brief    max17261_read_capacity_debug(). This function reads and displays
+ *           various capacity-related registers for debugging fuel gauge behavior.
+ ****************************************************************************/
+void max17261_read_capacity_debug(void);
 
 /**
  * @brief    max17261_config_ez(). This function performs EZ configuraiton
  *           as described in Software Implementation guide.
- * @return void
+ * @param[in] timeout_ms. Timeout in milliseconds (default 2000ms if 0 is passed)
+ * @return   1 if successful (configuration completed), 0 if timeout occurred
  ****************************************************************************/
-void max17261_config_ez(void);
+int max17261_config_ez(uint32_t timeout_ms);
 
 /**
- * @brief    Fuel_gauge_data_collect. This function reads the fuel gauge registers and outputs to OutputString Variable. 
-             The idea is to use this right after SD-card write 
- * @param[in] unsigned long timer_count_value. This is a time stamp in seconds.
- * @param[out]  char * OutputString.  This is the output string of fuel gauge readings.
- *
+ * @brief    Fuel_gauge_data_collect. This function reads fuel gauge registers and returns the data.
+ * @param[in]   label. Label to identify the measurement (e.g., "Before", "After").
+ * @return      fuel_gauge_data_t structure containing all measurements.
  ****************************************************************************/
-void Fuel_gauge_data_collect_after(char * OutputString);
-
-/**
- * @brief    Fuel_gauge_data_collect. This function reads the fuel gauge registers and outputs to OutputString Variable
-             The idea is to use this right before SD-card write
- * @param[in] unsigned long timer_count_value. This is a time stamp in seconds.
- * @param[out]  char * OutputString.  This is the output string of fuel gauge readings.
- *
- ****************************************************************************/
-void Fuel_gauge_data_collect_before(char * OutputString);
+fuel_gauge_data_t Fuel_gauge_data_collect(const char *label);
 
 
 #endif /* MAX17261_H_ */

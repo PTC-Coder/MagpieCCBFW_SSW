@@ -84,9 +84,11 @@
         "bsp_pushbutton.h": "c",
         "board.h": "c",
         "bsp_pins.h": "c",
-        "string.h": "c"
+        "string.h": "c",
+        "fuel_gauge.h": "c"
     },
     "cfs.configureWorkspace": "No",
     "terminal.integrated.enablePersistentSessions": true,
     "cortex-debug.variableUseNaturalFormat": false,
+    "kiroAgent.configureMCP": "Disabled",
 }

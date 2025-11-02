@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 /* Private defines ---------------------------------------------------------------------------------------------------*/
 
@@ -123,25 +124,46 @@ Wav_Metadata_Result_t wav_header_add_metadata(const char *key, const char *value
         return WAV_METADATA_ERROR_TOO_LONG;
     }
     
-    // Check if key already exists - if so, update it
-    for (uint32_t i = 0; i < wave_header.metadata_count; i++) {
-        if (wave_header.metadata_pairs[i].valid && 
-            strncmp(wave_header.metadata_pairs[i].key, key, MAX_KEY_LENGTH) == 0) {
-            // Update existing key
-            strncpy(wave_header.metadata_pairs[i].value, value, MAX_VALUE_LENGTH - 1);
-            wave_header.metadata_pairs[i].value[MAX_VALUE_LENGTH - 1] = '\0';
-            return WAV_METADATA_UPDATED;
-        }
-    }
-    
     // Check if we have space for more metadata
     if (wave_header.metadata_count >= MAX_METADATA_PAIRS) {
         return WAV_METADATA_ERROR_NO_SPACE;
     }
     
-    // Add new key-value pair
+    // Generate a unique key by appending incremental numbers if key already exists
+    char unique_key[MAX_KEY_LENGTH];
+    strncpy(unique_key, key, MAX_KEY_LENGTH - 1);
+    unique_key[MAX_KEY_LENGTH - 1] = '\0';
+    
+    uint32_t counter = 0;
+    bool key_exists = true;
+    
+    while (key_exists) {
+        key_exists = false;
+        
+        // Check if current unique_key already exists
+        for (uint32_t i = 0; i < wave_header.metadata_count; i++) {
+            if (wave_header.metadata_pairs[i].valid && 
+                strncmp(wave_header.metadata_pairs[i].key, unique_key, MAX_KEY_LENGTH) == 0) {
+                key_exists = true;
+                break;
+            }
+        }
+        
+        if (key_exists) {
+            counter++;
+            // Create new key with incremental number
+            int result = snprintf(unique_key, MAX_KEY_LENGTH, "%s_%u", key, counter);
+            
+            // Check if the generated key would be too long
+            if (result >= MAX_KEY_LENGTH) {
+                return WAV_METADATA_ERROR_TOO_LONG;
+            }
+        }
+    }
+    
+    // Add new key-value pair with unique key
     uint32_t index = wave_header.metadata_count;
-    strncpy(wave_header.metadata_pairs[index].key, key, MAX_KEY_LENGTH - 1);
+    strncpy(wave_header.metadata_pairs[index].key, unique_key, MAX_KEY_LENGTH - 1);
     wave_header.metadata_pairs[index].key[MAX_KEY_LENGTH - 1] = '\0';
     
     strncpy(wave_header.metadata_pairs[index].value, value, MAX_VALUE_LENGTH - 1);

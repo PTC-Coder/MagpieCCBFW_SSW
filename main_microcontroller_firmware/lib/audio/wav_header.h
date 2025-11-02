@@ -64,7 +64,7 @@ typedef enum
 typedef enum
 {
     WAV_METADATA_SUCCESS = 0,           /** Operation completed successfully */
-    WAV_METADATA_UPDATED = 1,           /** Existing key was updated successfully */
+    WAV_METADATA_UPDATED = 1,           /** Existing key was updated successfully (used by other functions) */
     WAV_METADATA_ERROR_NO_SPACE = -1,   /** No space available for more metadata pairs */
     WAV_METADATA_ERROR_INVALID_PARAM = -2, /** Invalid parameters (NULL key or value) */
     WAV_METADATA_ERROR_TOO_LONG = -3,   /** Key or value exceeds maximum length */
@@ -112,16 +112,16 @@ char *wav_header_get_header(void);
 uint32_t wav_header_get_header_length(void);
 
 /**
- * @brief `wav_header_add_metadata(key, value)` adds or updates a key-value pair in the WAV header metadata section.
+ * @brief `wav_header_add_metadata(key, value)` adds a key-value pair in the WAV header metadata section.
+ *        If the key already exists, automatically appends an incremental number to make it unique.
  *
  * @param key The metadata key (max 31 characters)
  * @param value The metadata value (max 63 characters)
  *
- * @retval WAV_METADATA_SUCCESS: New key-value pair added successfully
- *         WAV_METADATA_UPDATED: Existing key was updated successfully
+ * @retval WAV_METADATA_SUCCESS: New key-value pair added successfully (may have incremental suffix if key existed)
  *         WAV_METADATA_ERROR_NO_SPACE: No space available for more metadata pairs
  *         WAV_METADATA_ERROR_INVALID_PARAM: Invalid parameters (NULL key or value)
- *         WAV_METADATA_ERROR_TOO_LONG: Key or value exceeds maximum length
+ *         WAV_METADATA_ERROR_TOO_LONG: Key or value exceeds maximum length (including generated suffix)
  */
 Wav_Metadata_Result_t wav_header_add_metadata(const char *key, const char *value);
 

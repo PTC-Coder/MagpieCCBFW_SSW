@@ -28,6 +28,7 @@
 #include <time.h>
 
 #include "icc.h"
+#include "fuel_gauge.h"
 
 // #include "mxc_device.h"
 // #include "mxc_sys.h"
@@ -77,9 +78,6 @@ static void start_recording(uint8_t number_of_channel, Audio_Sample_Rate_t rate,
 static void user_pushbutton_interrupt_callback(void *cbdata);
 static void setup_user_pushbutton_interrupt(void);
 
-//void OneshotTimerHandler(void);
-//void OneshotTimer(void);
-
 
 //#define FIRST_SET_RTC 1    //uncomment this to set the clock time in the setup_realtimeclock()
 
@@ -103,6 +101,8 @@ const struct tm ds3231_dateTimeDefault = {
 	.tm_sec = 0U
 };
 
+//=================================================
+
 static bool isContinuousRecording = false; //Flag to indicate if the recording is continuous or not
 
 // Non-blocking LED blink variables
@@ -114,7 +114,11 @@ int main(void)
 {
 #ifdef TERMINAL_IO_USE_CONSOLE_UART
     bsp_console_uart_init();
+#else
+    bsp_console_uart_deinit();
 #endif
+
+
     LED_cascade_right();
     LED_cascade_right();
 
@@ -122,8 +126,6 @@ int main(void)
     MXC_ICC_Enable();
 
     initialize_system();
-
-
 
     setup_user_pushbutton_interrupt();
 
@@ -141,6 +143,8 @@ int main(void)
     printf("|_|  |_|\\__,_|\\__, | .__/|_|\\___|\n");
     printf("              |___/|_|           \n\n");
     printf("==================================\n\n\n");
+
+    MXC_Delay(MXC_DELAY_MSEC(5)); //Allow RTT to output and clear buffer data
 
     //Get Temperature from RTC
     if (E_NO_ERROR != DS3231_RTC.read_temperature(&ds3231_temperature)) {
@@ -562,6 +566,46 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
         }
     }
 
+   
+    char tempWAVBuffer[50];
+    //================ Get time stamp and temperature ===========    
+
+    //Get Time Stamp from RTC
+    if (E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str)) 
+    {
+        snprintf(tempWAVBuffer, sizeof(tempWAVBuffer), "DS3231 Error");
+    } else {
+        strftime((uint8_t*)tempWAVBuffer, OUTPUT_MSG_BUFFER_SIZE, "%Y%m%d_%H%M%SZ", &ds3231_datetime);
+    }
+    wav_header_add_metadata("Log Time", tempWAVBuffer);
+
+    //Get Temperature from RTC
+    if (E_NO_ERROR != DS3231_RTC.read_temperature(&ds3231_temperature)) 
+    {
+        snprintf(tempWAVBuffer, sizeof(tempWAVBuffer), "DS3231 Error");
+    } else {
+        sprintf((uint8_t*)tempWAVBuffer, "%.2f", ds3231_temperature);
+    }
+    wav_header_add_metadata("Temperature(C)", tempWAVBuffer);
+
+     //================ Get Fuel Gauge data while ADC and DMA still powered =======
+
+    fuel_gauge_data_t fg_metadata = Fuel_gauge_data_collect("Recording");
+    
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage*2);  
+    wav_header_add_metadata("Recording Voltage(V)", tempWAVBuffer);
+    
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.current_ma);  
+    wav_header_add_metadata("Recording Current(mA)", tempWAVBuffer);
+
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
+    wav_header_add_metadata("R Avg. Voltage(V)", tempWAVBuffer);
+    
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
+    wav_header_add_metadata("R Avg. Current(mA)", tempWAVBuffer);
+
+    //====== Stop ADC and DMA =============
+
     ad4630_384kHz_fs_clk_and_cs_stop();
     audio_dma_stop();
 
@@ -578,6 +622,23 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 
     wav_attr->file_length = sd_card_fsize();
     wav_header_set_attributes(wav_attr);
+
+         
+    //================ Get Fuel Gauge data after ADC and DMA stopped  =======
+    fg_metadata = Fuel_gauge_data_collect("Stopping");
+    
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage*2);  
+    wav_header_add_metadata("Stopping Voltage(V)", tempWAVBuffer);
+    
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.current_ma);  
+    wav_header_add_metadata("Stopping Current(mA)", tempWAVBuffer);
+
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
+    wav_header_add_metadata("S Avg. Voltage(V)", tempWAVBuffer);
+    
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
+    wav_header_add_metadata("S Avg. Current(mA)", tempWAVBuffer);
+    
 
     if (sd_card_fwrite(wav_header_get_header(), wav_header_get_header_length(), &bytes_written) != E_NO_ERROR)
     {
@@ -718,6 +779,82 @@ static void initialize_system(void)
         printf("[SUCCESS]--> 1V8 I2C init\n");
     }  
 
+    MXC_Delay(MXC_DELAY_MSEC(5)); //Allow RTT to output and clear buffer data
+
+    //////////////////// Fuel Gauge INIT ////////////////
+
+    max17261_soft_reset(); // perform soft reset
+    MXC_Delay(250);
+    if (max17261_por_detected())
+    {   // load max17261 configuration
+        if (!max17261_wait_dnr(0)) {
+            printf("[ERROR]--> DNR wait timeout POR config.\r\n");
+        }
+        else
+        {
+            printf("[SUCCESS]--> Fuel Gauge Started\n");
+        }
+        if (!max17261_config_ez(0)) {
+            printf("[ERROR]--> EZCfg timeout POR config.\r\n");
+        }
+        else
+        {
+            printf("[SUCCESS]--> EZ Config Loaded\n");
+        }
+        max17261_clear_por_bit();
+    }
+    else
+    {
+        printf("[INFO]--> POR not detected, Re-config\r\n");
+
+        // Force reconfiguration even without POR
+        if (!max17261_wait_dnr(0)) {
+            printf("[ERROR]--> DNR wait timeout POR config.\r\n");
+        }
+        else
+        {
+            printf("[SUCCESS]--> Fuel Gauge Started\n");
+        }
+        if (!max17261_config_ez(0)) {
+            printf("[ERROR]--> EZCfg timeout POR config.\r\n");
+        }
+        else
+        {
+            printf("[SUCCESS]--> EZ Config Loaded\n");
+        }
+    }
+
+    // Force reconfiguration if DesignCap is wrong.  
+    // This is often the case when the battery is changed or the pack is restarted
+    uint16_t current_designcap = max17261_read_designcap();
+    
+    if (current_designcap != 0x1950) {
+        printf("[INFO]--> Incorrect DesignCap (0x%04X)\n", current_designcap);
+        printf("[INFO]--> Re-configuring DesignCap ...\n");
+        max17261_soft_reset();
+        MXC_Delay(500000); // 500ms delay
+         if (!max17261_wait_dnr(0)) {
+            printf("[ERROR]--> DNR wait timeout POR config.\r\n");
+        }
+        else
+        {
+            printf("[SUCCESS]--> Fuel Gauge Started\n");
+        }
+        if (!max17261_config_ez(0)) {
+            printf("[ERROR]--> EZCfg timeout POR config.\r\n");
+        }
+        else
+        {
+            printf("[SUCCESS]--> EZ Config Loaded\n");
+        }
+        
+        // // Reset QH register for fresh start with new capacity
+        // max17261_reset_qh();        
+        // printf("Reconfiguration and QH reset complete\n");
+    }
+
+    MXC_Delay(MXC_DELAY_MSEC(5)); //Allow RTT to output and clear buffer data
+
     ////////////////////  AUDIO INIT ////////////////////
 
     if (afe_control_init() != E_NO_ERROR)
@@ -822,10 +959,10 @@ static void setup_realtimeclock()
 	// sec is 0-59
 	struct tm newTime = {
 		.tm_year = 2025 - 1900U,
-		.tm_mon =  8 - 1U,
-		.tm_mday = 7,
-		.tm_hour = 0,
-		.tm_min = 19,
+		.tm_mon =  11 - 1U,
+		.tm_mday = 2,
+		.tm_hour = 14,
+		.tm_min = 13,
 		.tm_sec = 0
 	};
 

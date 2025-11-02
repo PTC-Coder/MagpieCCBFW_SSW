@@ -13,8 +13,9 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <time.h>
 #include "mxc_delay.h"
-#include "max17261.h"
+#include "fuel_gauge.h"
 #include "stdbool.h"
 #include "math.h"
 #include "string.h"
@@ -26,20 +27,22 @@
 #include "bsp_pushbutton.h"
 
 /* Private defines ----------------------------------------------------------------------------------------------------*/
-#define console //Comment this if you want to disable printf
+//#define ShowPrintFOutput //Comment this if you want to disable printf
 #define MAX17261_I2C_ADDR 0x36u // Fuel Gauge I2C 7 bit address
 
 //Time LSB values please refere to https://www.analog.com/media/en/technical-documentation/user-guides/modelgauge-m5-host-side-software-implementation-guide.pdf
 #define tte_hr 1.6				// Bits 15:10 unit = 1.6 hours
-#define tte_min 1.5;			// Bits 9:4 unit = 1.5 minutes
-#define tte_sec 5.625;			// Bits 3:0 unit = 5.625 seconds
+#define tte_min 1.5			// Bits 9:4 unit = 1.5 minutes
+#define tte_sec 5.625			// Bits 3:0 unit = 5.625 seconds
 
-#define current_reg_resolution 781.25 //This is for >2000 mAh capacity please refere to page 23 of the https://www.analog.com/media/en/technical-documentation/data-sheets/max17261.pdf
+#define CURRENT_REG_RES 1562.5  //This is for >4000 mAh capacity please refere to page 23 of the https://www.analog.com/media/en/technical-documentation/data-sheets/max17261.pdf
+#define VCELL_LSB 0.000078125  //16-bit register 7.8125 uV per lsb (0.0V to 5.11992V)  Table 2 in MAX17261.pdf
+#define TTE_LSB  0.0015625 // (5.625 / 3600.0)  // Convert seconds to hours: 5.625s ÷ 3600s/hr = 0.0015625 hours
 
 
 
 /* Private MAX17261 specific globals ----------------------------------------------------------------------------------------------*/
-uint8_t max17261_regs[256]; // represents all the max17261 registers.
+uint8_t max17261_regs[256]; // For holding register value to read or write
 
 
 /* Private enumerations ----------------------------------------------------------------------------------------------*/
@@ -49,12 +52,13 @@ uint8_t max17261_regs[256]; // represents all the max17261 registers.
  */
 enum masks
 {
-	ModelCfg = 0x8000, // Since charge voltage is less than 4.275 volts
-	DesignCap = 0x0578,
+	ModelCfg = 0x8000, 
+	DesignCap = 0x1950,   // 32400 mAh (2S6P with 5400 mAh per cell: 6480 decimal = 0x1950)
 	IChgTerm = 0x01C0,
-	VEmpty = 0x9661,
+	VEmpty = 0xA061,   //3.2 V Empty / 3.88 V Recovery
 	POR_BIT = 0x0002,
 	DNR_BIT = 0x0001,
+
 };
 
 /**
@@ -64,12 +68,12 @@ enum masks
 typedef enum uint8_t
 {
 	// ModelGauge M5 EZ configuration registers
-	DesignCap_addr = 0x18u,
-	VEmpty_addr = 0x3Au,
-	ModelCfg_addr = 0xDBu,
-	IChgTerm_addr = 0x1Eu,
-	Config1_addr = 0x1Du,
-	Config2_addr = 0xBBu,
+	FG_ADDR_DESIGNCAP = 0x18u,   //expected capacity of the cell
+	FG_ADDR_VEMPTY = 0x3Au,   //Empty Voltage Target, during load.
+	FG_ADDR_MODELCFG = 0xDBu, // The ModelCFG register controls basic options of the EZ algorithm
+	FG_ADDR_ICHGTERM = 0x1Eu,  //device to detect when a charge cycle of the cell has completed
+	FG_ADDR_CONFIG1 = 0x1Du,
+	FG_ADDR_CONFIG2 = 0xBBu,
 
 	// ModelGauge m5 Register memory map
 	FullCapNom_addr = 0x23u,
@@ -90,20 +94,20 @@ typedef enum uint8_t
 
 	// Fuel gauge parameter other can be found in
 	// https://www.analog.com/media/en/technical-documentation/user-guides/max1726x-modelgauge-m5-ez-user-guide.pdf
-	FStat_addr = 0x3Du,
-	HibCFG_addr = 0xBAu,
-	Soft_Reset_addr = 0x60u,
+	FG_ADDR_FSTAT = 0x3Du,
+	FG_ADDR_HibCFG = 0xBAu,
+	FG_ADDR_SOFT_RESET = 0x60u,
 	DevName_addr = 0x21u,
-	Status_addr = 0x00u,
+	FG_ADDR_STATUS = 0x00u,
 
 	// Fuel Gauge parameters to read/log
-	VCell_addr = 0x09u,
-	AvgVCell_addr = 0x19u,
+	FG_ADDR_VCELL = 0x09u,  //cell voltage instantaneous
+	FG_ADDR_AVGVCELL = 0x19u, //cell voltage average
 	Temp_addr = 0x08u,
 	AvgTA_addr = 0x16u,
-	Current_addr = 0x0Au,
-	AvgCurrent_addr = 0x0Bu,
-	TTF_addr = 0x20u,
+	FG_ADDR_CURRENT = 0x0Au,
+	FG_ADDR_AVG_CURRENT = 0x0Bu,
+	TTF_addr = 0x20u,   //Time to full
 	RepCap_addr = 0x05u,
 	VFRemCap_addr = 0x4Au,
 	MixCap_addr = 0x0Fu,
@@ -112,10 +116,10 @@ typedef enum uint8_t
 	AvSOC_addr = 0x0Eu,
 	Timer_addr = 0x3Eu,
 	TimerH_addr = 0xBEu,
-	QH_addr = 0x4Du,
+	FG_ADDR_QH = 0x4Du,
 	AvCap_addr = 0x1Fu,
 	MixSOC_addr = 0x0Du,
-	TTE_addr = 0x11u,
+	FG_ADDR_TTE = 0x11u,   // Time to empty
 } max17261_registers_addr_t;
 
 /* Private function declarations --------------------------------------------------------------------------------------*/
@@ -147,9 +151,10 @@ int max17261_read_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint
  * @param[out]  reg_addr. The 1-byte address of the register on the I2C slave to start reading from.
  * @param[in]  *reg_data. Array of uint8_t data to read from the I2C slave.
  * @param[out]  num_of_byts. Number of bytes to read.
- * @return      true on success, false on failure
+ * @param[in]   timeout_ms. Timeout in milliseconds (default 2000ms if 0 is passed)
+ * @return      true on success, false on failure or timeout
  ****************************************************************************/
-bool max17261_write_verify_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint8_t *reg_data, uint16_t num_of_bytes);
+bool max17261_write_verify_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint8_t *reg_data, uint16_t num_of_bytes, uint32_t timeout_ms);
 
 /* max17261 function definitions --------------------------------------------------------------------------------------*/
 
@@ -181,7 +186,7 @@ int max17261_write_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uin
 		// Communication error
 		if (rslt != 1)
 		{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 			printf("Error (%d) writing data: Device = 0x%X; Register = 0x%X\n", rslt, dev_addr, reg_addr);
 #endif
 			return E_UNDERFLOW;
@@ -189,7 +194,7 @@ int max17261_write_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uin
 		// Message not acknowledged
 		else
 		{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 			printf("Write was not acknowledged: Device = 0x%X; Register = 0x%X\n", dev_addr, reg_addr);
 #endif
 			return E_NO_RESPONSE;
@@ -225,7 +230,7 @@ int max17261_read_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint
 		// Communication error
 		if (rslt != 1)
 		{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 			printf("Error (%d) reading data: Device = 0x%X; Register = 0x%X\n", rslt, dev_addr, reg_addr);
 #endif
 			return E_UNDERFLOW;
@@ -233,7 +238,7 @@ int max17261_read_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint
 		// Message not acknowledged
 		else
 		{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 			printf("Read was not acknowledged: Device = 0x%X; Register = 0x%X\n", dev_addr, reg_addr);
 #endif
 			return E_NO_RESPONSE;
@@ -243,35 +248,54 @@ int max17261_read_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint
 	return E_NO_ERROR;
 }
 
-bool max17261_write_verify_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint8_t *reg_data, uint16_t num_of_bytes)
+bool max17261_write_verify_reg(uint8_t dev_addr, max17261_registers_addr_t reg_addr, uint8_t *reg_data, uint16_t num_of_bytes, uint32_t timeout_ms)
 {
 	bool is_verified = false;
 	int i = 0;
 	uint8_t read_data[256];
+	uint32_t timeout = (timeout_ms == 0) ? 2000 : timeout_ms; // Default 2 seconds
+	uint32_t max_iterations = timeout / 3; // Each iteration takes ~3ms
+	uint32_t iteration_count = 0;
+	
 	while (!is_verified)
 	{
+		// Check timeout
+		if (iteration_count >= max_iterations)
+		{
+#if defined(ShowPrintFOutput)
+			printf("max17261_write_verify_reg timeout after %d ms\r\n", timeout);
+#endif
+			return false; // Timeout occurred
+		}
+		
 		max17261_write_reg(dev_addr, reg_addr, reg_data, num_of_bytes);
 		// delay 3ms with timer 1
 		MXC_Delay(3000);
+		iteration_count++;
+		
 		max17261_read_reg(dev_addr, reg_addr, &read_data[0], num_of_bytes);
-#if defined(console)
+#if defined(ShowPrintFOutput)
 		printf("write_and_verify reg_data = ");
 #endif
 		for (i = 0; i < num_of_bytes; i++)
 		{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 			printf("%02X", *(reg_data + i));
 #endif
 			if (read_data[i] != *(reg_data + i))
 			{
 				is_verified = false;
-				return is_verified;
+				break; // Exit the for loop, continue while loop
 			}
 		}
-#if defined(console)
-		printf("\n");
+		
+		if (i == num_of_bytes) // All bytes matched
+		{
+#if defined(ShowPrintFOutput)
+			printf("\n");
 #endif
-		is_verified = true;
+			is_verified = true;
+		}
 	}
 	return is_verified;
 }
@@ -284,39 +308,46 @@ int max17261_soft_reset(void)
 	max17261_regs[0] = 0x0F;
 	max17261_regs[1] = 0x00;
 	uint8_t message[] = {max17261_regs[0], max17261_regs[1]};
-	result = max17261_write_reg(MAX17261_I2C_ADDR, Soft_Reset_addr, &message, 2);
+	result = max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_SOFT_RESET, &message, 2);
 	if (result == E_NO_ERROR)
 	{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 		printf("Soft reset succesful\r\n");
 #endif
 		return E_SUCCESS;
 	}
 	else
 	{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 		printf("Soft reset failed\r\n");
 #endif
 		return E_FAIL;
 	}
 }
 
+
+
+//Power on reset
 bool max17261_por_detected(void)
 {
+	//POR (Power-On Reset): This bit is set to 1 when the device detects that a software or
+	//hardware POR event has occurred. This bit must be cleared by system software to detect the
+	//next POR event. POR is set to 1 at power-up.
+
 	uint16_t status_register = 0;
-	max17261_read_reg(MAX17261_I2C_ADDR, Status_addr, &max17261_regs[0x00], 2); // read status register
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_STATUS, &max17261_regs[0x00], 2); // read status register
 	status_register = (max17261_regs[1] << 8) + max17261_regs[0];				// make a 16-bit integer representing status register
-#if defined(console)
+#if defined(ShowPrintFOutput)
 	printf("status_register = %04x\n", status_register);
 #endif
 	if ((status_register & 0x0002) > 0) // POR bit is in the 2nd position (bit 1 position of Status register)
 	{
-#if defined(console)
+#if defined(ShowPrintFOutput)
 		printf("MAX17261 POR detected\n");
 #endif
 		return true;
 	}
-#if defined(console)
+#if defined(ShowPrintFOutput)
 	printf("MAX17261 POR not detected\n");
 #endif
 	return false;
@@ -324,86 +355,121 @@ bool max17261_por_detected(void)
 
 void max17261_clear_por_bit(void)
 {
-	max17261_read_reg(MAX17261_I2C_ADDR, Status_addr, &max17261_regs[0x00], 2);	 // read POR bit again
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_STATUS, &max17261_regs[0x00], 2);	 // read POR bit again
 	max17261_regs[0] = max17261_regs[0] & 0xFD;									 // LSB -- Set POR bit to 0. Bit position 1
-	max17261_write_reg(MAX17261_I2C_ADDR, Status_addr, &max17261_regs[0x00], 2); // clear POR bit
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_STATUS, &max17261_regs[0x00], 2); // clear POR bit
 }
 
-void max17261_wait_dnr(void)
+int max17261_wait_dnr(uint32_t timeout_ms)
 {
 	uint16_t FStat_register = 0;
-	// max17261_write_reg(MAX17261_I2C_ADDR,FStat_addr,&max17261_regs[0x00], 2);
-	max17261_read_reg(MAX17261_I2C_ADDR, FStat_addr, &max17261_regs[0x00], 2);
+	uint32_t timeout = (timeout_ms == 0) ? 2000 : timeout_ms; // Default 2 seconds
+	uint32_t max_iterations = timeout / 11; // Each iteration takes ~11ms
+	uint32_t iteration_count = 0;
+	
+	// max17261_write_reg(MAX17261_I2C_ADDR,FG_ADDR_FSTAT,&max17261_regs[0x00], 2);
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_FSTAT, &max17261_regs[0x00], 2);
 	FStat_register = (max17261_regs[1] << 8) + max17261_regs[0];
 
 	while ((FStat_register & 0x0001) == 0x0001)
 	{
+		// Check timeout
+		if (iteration_count >= max_iterations)
+		{
+#if defined(ShowPrintFOutput)
+			printf("max17261_wait_dnr timeout after %d ms\r\n", timeout);
+#endif
+			return 0; // Timeout occurred
+		}
 
 		// 11 ms delay
 		MXC_Delay(11000);
-		// max17261_write_reg(MAX17261_I2C_ADDR,FStat_addr,&max17261_regs[0x00], 2);
-		max17261_read_reg(MAX17261_I2C_ADDR, FStat_addr, &max17261_regs[0x00], 2);
+		iteration_count++;
+		
+		// max17261_write_reg(MAX17261_I2C_ADDR,FG_ADDR_FSTAT,&max17261_regs[0x00], 2);
+		max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_FSTAT, &max17261_regs[0x00], 2);
 		FStat_register = (max17261_regs[1] << 8) + max17261_regs[0];
 	}
+	
+	return 1; // Success
 }
 
-void max17261_config_ez(void)
+int max17261_config_ez(uint32_t timeout_ms)
 {
 	uint16_t tempdata;
+	uint32_t timeout = (timeout_ms == 0) ? 2000 : timeout_ms; // Default 2 seconds
+	uint32_t max_iterations = timeout / 15; // Each iteration takes ~15ms (11+2+2)
+	uint32_t iteration_count = 0;
+	
 	/// Store original HibCFG value, read in HibCfg; prepare to load model
 	uint8_t hibcfg_reg[2];
-	max17261_read_reg(MAX17261_I2C_ADDR, HibCFG_addr, &hibcfg_reg[0x00], 2); // read hibcfg register
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_HibCFG, &hibcfg_reg[0x00], 2); // read hibcfg register
 																			 /// Exit Hibernate Mode step
 	max17261_regs[0] = 0x90;
 	max17261_regs[1] = 0x00;
-	max17261_write_reg(MAX17261_I2C_ADDR, Soft_Reset_addr, &max17261_regs[0x00], 2); // Soft wakeup (Step 1)
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_SOFT_RESET, &max17261_regs[0x00], 2); // Soft wakeup (Step 1)
 	max17261_regs[0] = 0x00;
 
-	max17261_write_reg(MAX17261_I2C_ADDR, HibCFG_addr, &max17261_regs[0x00], 2);	 // Exit hibernate mode Step 2
-	max17261_write_reg(MAX17261_I2C_ADDR, Soft_Reset_addr, &max17261_regs[0x00], 2); // Exit hibernate mode Step 3
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_HibCFG, &max17261_regs[0x00], 2);	 // Exit hibernate mode Step 2
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_SOFT_RESET, &max17261_regs[0x00], 2); // Exit hibernate mode Step 3
 
 	/// OPTION 1 EZ Config (No INI file is needed)
 	// load DesignCap
 	tempdata = DesignCap;
 	max17261_regs[0] = tempdata & 0x00FF;
 	max17261_regs[1] = tempdata >> 8;
-	max17261_write_reg(MAX17261_I2C_ADDR, DesignCap_addr, &max17261_regs[0x00], 2);
+#if defined(ShowPrintFOutput)
+	printf("Writing DesignCap = 0x%04X (%d) = %d mAh\r\n", tempdata, tempdata, tempdata * 5);
+#endif
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_DESIGNCAP, &max17261_regs[0x00], 2);
 
 	// load IChgTerm
 	tempdata = IChgTerm;
 	max17261_regs[0] = tempdata & 0x00FF;
 	max17261_regs[1] = tempdata >> 8;
-	max17261_write_reg(MAX17261_I2C_ADDR, IChgTerm_addr, &max17261_regs[0x00], 2);
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_ICHGTERM, &max17261_regs[0x00], 2);
 
 	// load VEmpty
 	tempdata = VEmpty;
 	max17261_regs[0] = tempdata & 0x00FF;
 	max17261_regs[1] = tempdata >> 8;
-	max17261_write_reg(MAX17261_I2C_ADDR, VEmpty_addr, &max17261_regs[0x00], 2);
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_VEMPTY, &max17261_regs[0x00], 2);
 
 	// load ModelCfg
 	tempdata = ModelCfg;
 	max17261_regs[0] = tempdata & 0x00FF;
 	max17261_regs[1] = tempdata >> 8;
-	max17261_write_reg(MAX17261_I2C_ADDR, ModelCfg_addr, &max17261_regs[0x00], 2);
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_MODELCFG, &max17261_regs[0x00], 2);
 
 	// Poll ModelCFG.Refresh bit, do not continue until ModelCFG.Refresh==0
-	max17261_read_reg(MAX17261_I2C_ADDR, ModelCfg_addr, &max17261_regs[0x00], 2); // read status register
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_MODELCFG, &max17261_regs[0x00], 2); // read status register
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 
 	while ((tempdata & 0x8000) == 0x8000)
 	{
+		// Check timeout
+		if (iteration_count >= max_iterations)
+		{
+#if defined(ShowPrintFOutput)
+			printf("max17261_config_ez timeout after %d ms\r\n", timeout);
+#endif
+			return 0; // Timeout occurred
+		}
+		
 		MXC_Delay(11000);															  // 11 ms delay // delay 11ms
-		max17261_read_reg(MAX17261_I2C_ADDR, ModelCfg_addr, &max17261_regs[0x00], 2); // read ModelCfg register
+		max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_MODELCFG, &max17261_regs[0x00], 2); // read ModelCfg register
 		MXC_Delay(2000);
 		tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 		MXC_Delay(2000);
+		iteration_count++;
 	}
 
 	// Restore Original HibCFG value
 	MXC_Delay(2000);
-	max17261_write_reg(MAX17261_I2C_ADDR, HibCFG_addr, &hibcfg_reg[0x00], 2);
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_HibCFG, &hibcfg_reg[0x00], 2);
 	MXC_Delay(2000);
+	
+	return 1; // Success
 }
 
 uint8_t max17261_read_repsoc(void)
@@ -420,138 +486,190 @@ uint16_t max17261_read_repcap(void)
 	return (tempdata);
 }
 
-void max17261_read_tte(uint8_t *hrs, uint8_t *mins, uint8_t *secs)
+uint16_t max17261_read_designcap(void)
+{
+	uint16_t tempdata = 0;
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_DESIGNCAP, &max17261_regs[0x00], 2); // Read DesignCap
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	return (tempdata);
+}
+
+int max17261_reset_qh(void)
+{
+	// Reset QH register (coulomb counter) to 0x0000
+	max17261_regs[0] = 0x00;
+	max17261_regs[1] = 0x00;
+	
+#if defined(ShowPrintFOutput)
+	printf("Resetting QH register to 0x0000\r\n");
+#endif
+	
+	int result = max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_QH, &max17261_regs[0x00], 2);
+	
+	if (result == E_NO_ERROR) {
+#if defined(ShowPrintFOutput)
+		printf("QH register reset successful\r\n");
+#endif
+		return E_SUCCESS;
+	} else {
+#if defined(ShowPrintFOutput)
+		printf("QH register reset failed\r\n");
+#endif
+		return E_FAIL;
+	}
+}
+
+double max17261_read_tte(void)
 {
 	// This function gets the "Time to Empty" (TTE) value. TTE is in memory location 0x11.
 	// The LSB of the TTE register is 5.625 seconds.
-	uint16_t tte_register = 0;
-
-	double tte_hrs = 0;	 // Bits 15:10 unit = 1.6 hours
-	double tte_mins = 0; // Bits 9:4 unit = 1.5 minutes
-	double tte_secs = 0; // Bits 3:0 unit = 5.625 seconds
-
-	double secs_from_hrs = 0.0;
-	double secs_from_mins = 0.0;
-	double secs_from_secs = 0.0;
-	double total_seconds = 0.0;
-
-	max17261_read_reg(MAX17261_I2C_ADDR, TTE_addr, &max17261_regs[0x00], 2); // Read Time To Empty
-	tte_register = (((uint16_t)max17261_regs[0x01]) << 8) + max17261_regs[0x00];
-
-	
-	tte_hrs = (double)(max17261_regs[1] >> 2) * (double)tte_hr;
-	secs_from_hrs = tte_hrs * 3600;
-	
-	tte_mins = (double)(tte_register & 0x03F0) * (double)tte_min;
-	secs_from_mins = tte_mins * 60;
-	
-	tte_secs = (double)(max17261_regs[0] & 0x0F) * (double)tte_sec;
-	secs_from_secs = tte_secs;
-	total_seconds = round(secs_from_hrs + secs_from_mins + secs_from_secs); // add all seconds up
-
-	*hrs = (uint8_t)(total_seconds / 3600);
-	*mins = (uint8_t)((total_seconds - (3600 * (*hrs))) / 60);
-	*secs = (uint8_t)(total_seconds - (3600 * (*hrs)) - ((*mins) * 60));
-}
-
-void Fuel_gauge_data_collect_after(char *OutputString)
-{
-	// 		// local variables
 	uint16_t tempdata = 0;
-	int16_t stempdata = 0;
-	char tempstring[20] = {0};
 
-	// Instance name for logging
-	sprintf(tempstring, "%s,", "After");
-	strcat(OutputString, (const char *)&tempstring);
-
-	// Read Current (in mA)
-	tempdata = 0;
-	memset(tempstring, 0, 20);
-	max17261_read_reg(MAX17261_I2C_ADDR, Current_addr, &max17261_regs[0x00], 2); // Read register
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_TTE, &max17261_regs[0x00], 2);
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
-	stempdata = (int16_t)tempdata; // this is going to be signed number, so convert to 16-bit int
-#if defined(console)
-	printf("Current register = %f\r\n", (double)stempdata * (double)current_reg_resolution / 1000);
-#endif
-	sprintf(tempstring, "%f,", (double)stempdata * (double)current_reg_resolution / 1000);
-	strcat(OutputString, (const char *)&tempstring);
 
-	// Read AvgCurrent
-	tempdata = 0;
-	memset(tempstring, 0, 20);
-	max17261_read_reg(MAX17261_I2C_ADDR, AvgCurrent_addr, &max17261_regs[0x00], 2); // Read register
-	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
-	stempdata = (int16_t)tempdata; // this is going to be signed number, so convert to 16-bit int
-#if defined(console)
-	printf("AvgCurrent register = %f\r\n", (double)stempdata * (double)current_reg_resolution / 1000);
-#endif
-	sprintf(tempstring, "%f,", (double)stempdata * (double)current_reg_resolution / 1000);
-	strcat(OutputString, (const char *)&tempstring);
+	double tte_hours = (double)tempdata * TTE_LSB;
 
-	// Read QH
-	tempdata = 0;
-	memset(tempstring, 0, 20);
-	max17261_read_reg(MAX17261_I2C_ADDR, QH_addr, &max17261_regs[0x00], 2); // Read register
-	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
-#if defined(console)
-	printf("QH register(coulomb count) = %f\r\n", (double)tempdata * (double)0.25); // We have 20mOhm sense resistor so the LSB is 0.25
+#if defined(ShowPrintFOutput)
+	printf("TTE raw register = 0x%04X (%d)\r\n", tempdata, tempdata);
+	printf("TTE_LSB = %f\r\n", TTE_LSB);
+	printf("TTE hours = %f\r\n", tte_hours);
+	printf("TTE days = %f\r\n", tte_hours / 24.0);
 #endif
-	sprintf(tempstring, "%f,", (double)tempdata * (double)0.25);
-	strcat(OutputString, (const char *)&tempstring);
-	strcat(OutputString, "\n");
+
+	return tte_hours;
 }
 
-/**
- * @brief    Fuel_gauge_data_collect. This function reads the fuel gauge registers and outputs to OutputString Variable
- * @param[in] None
- * @param[out]  char * OutputString.  This is the output string of fuel gauge readings.
- *
- ****************************************************************************/
-void Fuel_gauge_data_collect_before(char *OutputString)
+double max17261_calculate_tte_manual(void)
 {
-	// 		// local variables
-	uint16_t tempdata = 0;
-	int16_t stempdata = 0;
-	char tempstring[20] = {0};
-
-	// Instance name for logging
-	sprintf(tempstring, "%s,", "Before");
-	strcat(OutputString, (const char *)&tempstring);
-
-	// Read Current (in mA)
-	tempdata = 0;
-	memset(tempstring, 0, 20);
-	max17261_read_reg(MAX17261_I2C_ADDR, Current_addr, &max17261_regs[0x00], 2); // Read register
-	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
-	stempdata = (int16_t)tempdata; // this is going to be signed number, so convert to 16-bit int
-#if defined(console)
-	printf("Current register = %f\r\n", (double)stempdata * (double)current_reg_resolution / 1000);
+	// Manual TTE calculation using RepCap and AvgCurrent for large batteries
+	// where the fuel gauge TTE register saturates at 4.27 days
+	
+	uint16_t repcap_raw = 0;
+	uint16_t avgcurrent_raw = 0;
+	int16_t avgcurrent_signed = 0;
+	
+	// Read remaining capacity
+	max17261_read_reg(MAX17261_I2C_ADDR, RepCap_addr, &max17261_regs[0x00], 2);
+	repcap_raw = (max17261_regs[1] << 8) + max17261_regs[0];
+	
+	// Read average current
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_AVG_CURRENT, &max17261_regs[0x00], 2);
+	avgcurrent_raw = (max17261_regs[1] << 8) + max17261_regs[0];
+	avgcurrent_signed = (int16_t)avgcurrent_raw;
+	
+	// Convert to actual values
+	double remaining_capacity_mah = (double)repcap_raw * 5.0; // 5mAh per LSB with 1mΩ sense resistor
+	double avg_current_ma = (double)avgcurrent_signed * CURRENT_REG_RES / 1000.0;
+	
+	double tte_hours = 0.0;
+	
+	if (avg_current_ma < 0) // Only valid when discharging
+	{
+		tte_hours = remaining_capacity_mah / (-avg_current_ma);
+	}
+	
+#if defined(ShowPrintFOutput)
+	printf("Manual TTE calculation:\r\n");
+	printf("  RepCap raw = 0x%04X (%d)\r\n", repcap_raw, repcap_raw);
+	printf("  Remaining capacity = %.1f mAh\r\n", remaining_capacity_mah);
+	printf("  Avg current = %.2f mA\r\n", avg_current_ma);
+	printf("  Manual TTE = %.1f hours (%.1f days)\r\n", tte_hours, tte_hours / 24.0);
 #endif
-	sprintf(tempstring, "%f,", (double)stempdata * (double)current_reg_resolution / 1000);
-	strcat(OutputString, (const char *)&tempstring);
-
-	// Read AvgCurrent
-	tempdata = 0;
-	memset(tempstring, 0, 20);
-	max17261_read_reg(MAX17261_I2C_ADDR, AvgCurrent_addr, &max17261_regs[0x00], 2); // Read register
-	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
-	stempdata = (int16_t)tempdata; // this is going to be signed number, so convert to 16-bit int
-#if defined(console)
-	printf("AvgCurrent register = %f\r\n", (double)stempdata * (double)current_reg_resolution / 1000);
-#endif
-	sprintf(tempstring, "%f,", (double)stempdata * (double)current_reg_resolution / 1000);
-	strcat(OutputString, (const char *)&tempstring);
-
-	// Read QH
-	tempdata = 0;
-	memset(tempstring, 0, 20);
-	max17261_read_reg(MAX17261_I2C_ADDR, QH_addr, &max17261_regs[0x00], 2); // Read register
-	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
-#if defined(console)
-	printf("QH register(coulomb count) = %f\r\n", (double)tempdata * (double)0.25); // We have 20mOhm sense resistor so the LSB is 0.25
-#endif
-	sprintf(tempstring, "%f,", (double)tempdata * (double)0.25);
-	strcat(OutputString, (const char *)&tempstring);
-	strcat(OutputString, "\n");
+	
+	return tte_hours;
 }
+
+void max17261_read_capacity_debug(void)
+{
+	uint16_t repcap, fullcaprep, fullcap, designcap, repsoc;
+	
+	// Read various capacity registers
+	max17261_read_reg(MAX17261_I2C_ADDR, RepCap_addr, &max17261_regs[0x00], 2);
+	repcap = (max17261_regs[1] << 8) + max17261_regs[0];
+	
+	max17261_read_reg(MAX17261_I2C_ADDR, FullCapRep_addr, &max17261_regs[0x00], 2);
+	fullcaprep = (max17261_regs[1] << 8) + max17261_regs[0];
+	
+	max17261_read_reg(MAX17261_I2C_ADDR, FullCap_addr, &max17261_regs[0x00], 2);
+	fullcap = (max17261_regs[1] << 8) + max17261_regs[0];
+	
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_DESIGNCAP, &max17261_regs[0x00], 2);
+	designcap = (max17261_regs[1] << 8) + max17261_regs[0];
+	
+	repsoc = max17261_read_repsoc();
+	
+#if defined(ShowPrintFOutput)
+	printf("=== Capacity Debug Info ===\r\n");
+	printf("DesignCap: 0x%04X (%d) = %d mAh\r\n", designcap, designcap, designcap * 5);
+	printf("FullCapRep: 0x%04X (%d) = %d mAh\r\n", fullcaprep, fullcaprep, fullcaprep * 5);
+	printf("FullCap: 0x%04X (%d) = %d mAh\r\n", fullcap, fullcap, fullcap * 5);
+	printf("RepCap: 0x%04X (%d) = %d mAh\r\n", repcap, repcap, repcap * 5);
+	printf("RepSOC: %d%%\r\n", repsoc);
+	printf("Calculated SOC: %.1f%% (RepCap/FullCapRep)\r\n", (float)repcap * 100.0 / fullcaprep);
+	printf("===========================\r\n");
+#endif
+}
+
+fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
+{
+	// Local variables
+	uint16_t tempdata = 0;
+	int16_t signed_tempdata = 0;
+	fuel_gauge_data_t data = {0}; // Initialize structure to zero
+
+#if defined(ShowPrintFOutput)
+	printf("=== Fuel Gauge Data (%s) ===\r\n", label);
+#endif
+
+	// Read VCell (instantaneous cell voltage)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_VCELL, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	data.vcell_raw = tempdata;
+	data.vcell_voltage = (double)tempdata * VCELL_LSB;
+#if defined(ShowPrintFOutput)
+	printf("VCell: %.3f V\r\n", data.vcell_voltage);
+#endif
+
+	// Read AvgVCell (average cell voltage)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_AVGVCELL, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	data.avg_vcell_raw = tempdata;
+	data.avg_vcell_voltage = (double)tempdata * VCELL_LSB;
+#if defined(ShowPrintFOutput)
+	printf("Avg VCell: %.3f V\r\n", data.avg_vcell_voltage);
+#endif
+
+	// Read Current (instantaneous current in mA)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_CURRENT, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	signed_tempdata = (int16_t)tempdata; // Current is signed
+	data.current_raw = tempdata;
+	data.current_ma = (double)signed_tempdata * (double)CURRENT_REG_RES / 1000;
+#if defined(ShowPrintFOutput)
+	printf("Current: %.2f mA\r\n", data.current_ma);
+#endif
+
+	// Read AvgCurrent (average current in mA)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_AVG_CURRENT, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	signed_tempdata = (int16_t)tempdata; // Current is signed
+	data.avg_current_raw = tempdata;
+	data.avg_current_ma = (double)signed_tempdata * (double)CURRENT_REG_RES / 1000;
+#if defined(ShowPrintFOutput)
+	printf("Avg Current: %.2f mA\r\n", data.avg_current_ma);
+#endif
+
+	// Read QH (coulomb counter)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_QH, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	data.qh_raw = tempdata;
+	data.qh_mah = (double)tempdata * 1.5625;
+#if defined(ShowPrintFOutput)
+	printf("QH (coulomb count): %.1f mAh\r\n", data.qh_mah);
+	printf("===============================\r\n");
+#endif
+
+	return data;
+}
+
