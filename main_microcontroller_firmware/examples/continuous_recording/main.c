@@ -375,13 +375,13 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
             //error_handler(STATUS_LED_COLOR_BLUE);
               //error_handler(STATUS_LED_COLOR_BLUE);
             num_dma_blocks_consumed = num_dma_blocks_in_the_file;  // stop recording this run and exit the loop
+            //audio_dma_clear_overrun(AUDIO_CHANNEL_0);
+            //audio_dma_clear_overrun(AUDIO_CHANNEL_1);
+            //we'll start over with the net
+            //break;
             audio_dma_clear_overrun(AUDIO_CHANNEL_0);
             audio_dma_clear_overrun(AUDIO_CHANNEL_1);
-            //we'll start over with the net
-            break;
-            // audio_dma_clear_overrun(AUDIO_CHANNEL_0);
-            // audio_dma_clear_overrun(AUDIO_CHANNEL_1);
-            // continue;  //experiment to just continue
+            continue;  //experiment to just continue
         }
 
         if (audio_dma_num_buffers_available(AUDIO_CHANNEL_0) > 0 && audio_dma_num_buffers_available(AUDIO_CHANNEL_1) > 0)
@@ -603,8 +603,11 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
     wav_header_add_metadata("R Avg. Voltage(V)", tempWAVBuffer);
     
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
-    wav_header_add_metadata("R Avg. Current(mA)", tempWAVBuffer);
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.temperature_c);  
+    wav_header_add_metadata("FG Temperature(C)", tempWAVBuffer);
+
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_temperature_c);  
+    wav_header_add_metadata("FG Avg. Temperature(C)", tempWAVBuffer);
 
     //====== Stop ADC and DMA =============
 
@@ -626,20 +629,20 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
     wav_header_set_attributes(wav_attr);
 
          
-    //================ Get Fuel Gauge data after ADC and DMA stopped  =======
-    fg_metadata = Fuel_gauge_data_collect("Stopping");
+    // //================ Get Fuel Gauge data after ADC and DMA stopped  =======
+    // fg_metadata = Fuel_gauge_data_collect("Stopping");
     
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage*2);  
-    wav_header_add_metadata("Stopping Voltage(V)", tempWAVBuffer);
+    // sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage*2);  
+    // wav_header_add_metadata("Stopping Voltage(V)", tempWAVBuffer);
     
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.current_ma);  
-    wav_header_add_metadata("Stopping Current(mA)", tempWAVBuffer);
+    // sprintf(tempWAVBuffer, "%.2f", fg_metadata.current_ma);  
+    // wav_header_add_metadata("Stopping Current(mA)", tempWAVBuffer);
 
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
-    wav_header_add_metadata("S Avg. Voltage(V)", tempWAVBuffer);
+    // sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
+    // wav_header_add_metadata("S Avg. Voltage(V)", tempWAVBuffer);
     
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
-    wav_header_add_metadata("S Avg. Current(mA)", tempWAVBuffer);
+    // sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
+    // wav_header_add_metadata("S Avg. Current(mA)", tempWAVBuffer);
     
 
     if (sd_card_fwrite(wav_header_get_header(), wav_header_get_header_length(), &bytes_written) != E_NO_ERROR)
@@ -1111,44 +1114,3 @@ static void user_pushbutton_interrupt_callback(void *cbdata)
     start_user_btn_debounceTimer();  //re-activate one shot timer
     
 }
-
-// void OneshotTimerHandler()
-// {
-//     // Clear interrupt
-//     MXC_TMR_ClearFlags(OST_TIMER);
-//     printf("One Shot Time fired \n");
-// }
-
-// void OneshotTimer()
-// {
-//     // Declare variables
-//     mxc_tmr_cfg_t tmr;
-//     uint32_t periodTicks = PeripheralClock / (128*1000) * INTERVAL_TIME_OST;
-//     /*
-//     Steps for configuring a timer for PWM mode:
-//     1. Disable the timer
-//     2. Set the prescale value
-//     3  Configure the timer for continuous mode
-//     4. Set polarity, timer parameters
-//     5. Enable Timer
-//     */
-
-//     MXC_TMR_Shutdown(OST_TIMER);
-
-//     tmr.pres = TMR_PRES_128;
-//     tmr.mode = TMR_MODE_ONESHOT;
-//     tmr.cmp_cnt = periodTicks;
-//     tmr.pol = 0;
-
-//     MXC_SYS_Reset_Periph(MXC_SYS_RESET_TIMER5);
-//     while (MXC_GCR->rstr0 & MXC_F_GCR_RSTR0_TIMER5) {}
-//     MXC_SYS_ClockEnable(MXC_SYS_PERIPH_CLOCK_T5);
-//     MXC_GPIO_Config(&gpio_cfg_tmr5);
-
-//     MXC_TMR_Init(OST_TIMER, &tmr);
-
-//     MXC_TMR_Start(OST_TIMER);
-
-//     printf("PeriodTicks = %d \n", periodTicks);
-//     printf("Oneshot timer started.\n\n");
-// }

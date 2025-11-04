@@ -38,6 +38,7 @@
 #define CURRENT_REG_RES 1562.5  //This is for >4000 mAh capacity please refere to page 23 of the https://www.analog.com/media/en/technical-documentation/data-sheets/max17261.pdf
 #define VCELL_LSB 0.000078125  //16-bit register 7.8125 uV per lsb (0.0V to 5.11992V)  Table 2 in MAX17261.pdf
 #define TTE_LSB  0.0015625 // (5.625 / 3600.0)  // Convert seconds to hours: 5.625s ÷ 3600s/hr = 0.0015625 hours
+#define TEMP_LSB 0.00390625 // Temperature LSB = 1/256°C per bit (from user's guide Table 3)
 
 
 
@@ -58,6 +59,7 @@ enum masks
 	VEmpty = 0xA061,   //3.2 V Empty / 3.88 V Recovery
 	POR_BIT = 0x0002,
 	DNR_BIT = 0x0001,
+	FilterCfg_Default = 0xCEA9,  // Modified FilterCfg: CURR=9 for 3-minute AvgCurrent time constant
 
 };
 
@@ -74,6 +76,7 @@ typedef enum uint8_t
 	FG_ADDR_ICHGTERM = 0x1Eu,  //device to detect when a charge cycle of the cell has completed
 	FG_ADDR_CONFIG1 = 0x1Du,
 	FG_ADDR_CONFIG2 = 0xBBu,
+	FG_ADDR_FILTERCFG = 0x29u,  // FilterCfg register for averaging time constants
 
 	// ModelGauge m5 Register memory map
 	FullCapNom_addr = 0x23u,
@@ -103,8 +106,8 @@ typedef enum uint8_t
 	// Fuel Gauge parameters to read/log
 	FG_ADDR_VCELL = 0x09u,  //cell voltage instantaneous
 	FG_ADDR_AVGVCELL = 0x19u, //cell voltage average
-	Temp_addr = 0x08u,
-	AvgTA_addr = 0x16u,
+	FG_ADDR_TEMP = 0x08u,
+	FG_ADDR_AVGTEMP = 0x16u,
 	FG_ADDR_CURRENT = 0x0Au,
 	FG_ADDR_AVG_CURRENT = 0x0Bu,
 	TTF_addr = 0x20u,   //Time to full
@@ -435,6 +438,15 @@ int max17261_config_ez(uint32_t timeout_ms)
 	max17261_regs[1] = tempdata >> 8;
 	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_VEMPTY, &max17261_regs[0x00], 2);
 
+	// load FilterCfg (configure averaging time constants before ModelCfg)
+	tempdata = FilterCfg_Default;
+	max17261_regs[0] = tempdata & 0x00FF;
+	max17261_regs[1] = tempdata >> 8;
+#if defined(ShowPrintFOutput)
+	printf("Writing FilterCfg = 0x%04X (AvgCurrent time constant = 3 minutes)\r\n", tempdata);
+#endif
+	max17261_write_reg(MAX17261_I2C_ADDR, FG_ADDR_FILTERCFG, &max17261_regs[0x00], 2);
+
 	// load ModelCfg
 	tempdata = ModelCfg;
 	max17261_regs[0] = tempdata & 0x00FF;
@@ -645,7 +657,7 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 	signed_tempdata = (int16_t)tempdata; // Current is signed
 	data.current_raw = tempdata;
-	data.current_ma = (double)signed_tempdata * (double)CURRENT_REG_RES / 1000;
+	data.current_ma = -1* (double)signed_tempdata * (double)CURRENT_REG_RES / 1000;
 #if defined(ShowPrintFOutput)
 	printf("Current: %.2f mA\r\n", data.current_ma);
 #endif
@@ -655,9 +667,29 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 	signed_tempdata = (int16_t)tempdata; // Current is signed
 	data.avg_current_raw = tempdata;
-	data.avg_current_ma = (double)signed_tempdata * (double)CURRENT_REG_RES / 1000;
+	data.avg_current_ma = -1 * (double)signed_tempdata * (double)CURRENT_REG_RES / 1000;
 #if defined(ShowPrintFOutput)
 	printf("Avg Current: %.2f mA\r\n", data.avg_current_ma);
+#endif
+
+	// Read Temperature (instantaneous temperature in °C)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_TEMP, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	signed_tempdata = (int16_t)tempdata; // Temperature is signed
+	data.temperature_raw = tempdata;
+	data.temperature_c = (double)signed_tempdata * TEMP_LSB;
+#if defined(ShowPrintFOutput)
+	printf("Temperature: %.2f °C\r\n", data.temperature_c);
+#endif
+
+	// Read AvgTA (average temperature in °C)
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_AVGTEMP, &max17261_regs[0x00], 2);
+	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
+	signed_tempdata = (int16_t)tempdata; // Temperature is signed
+	data.avg_temperature_raw = tempdata;
+	data.avg_temperature_c = (double)signed_tempdata * TEMP_LSB;
+#if defined(ShowPrintFOutput)
+	printf("Avg Temperature: %.2f °C\r\n", data.avg_temperature_c);
 #endif
 
 	// Read QH (coulomb counter)
@@ -671,5 +703,40 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 #endif
 
 	return data;
+}
+
+void max17261_read_filtercfg_debug(void)
+{
+	uint16_t filtercfg_reg = 0;
+	
+	// Read FilterCfg register
+	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_FILTERCFG, &max17261_regs[0x00], 2);
+	filtercfg_reg = (max17261_regs[1] << 8) + max17261_regs[0];
+	
+	// Extract individual fields
+	uint8_t curr_field = filtercfg_reg & 0x0F;        // Bits 3:0
+	uint8_t volt_field = (filtercfg_reg >> 4) & 0x0F; // Bits 7:4
+	uint8_t mix_field = (filtercfg_reg >> 8) & 0x0F;  // Bits 11:8
+	uint8_t temp_field = (filtercfg_reg >> 12) & 0x0F; // Bits 15:12
+	
+	// Calculate time constants using formulas from user's guide
+	double avgcurrent_time_s = 45.0 * pow(2, (int)curr_field - 7);
+	double avgvcell_time_s = 45.0 * pow(2, (int)volt_field - 2);
+	double mixing_time_s = 45.0 * pow(2, (int)mix_field - 3);
+	double avgta_time_s = 45.0 * pow(2, (int)temp_field);
+	
+#if defined(ShowPrintFOutput)
+	printf("=== FilterCfg Debug Info ===\r\n");
+	printf("FilterCfg Register: 0x%04X\r\n", filtercfg_reg);
+	printf("CURR field: %d -> AvgCurrent time constant: %.1f s (%.1f min)\r\n", 
+	       curr_field, avgcurrent_time_s, avgcurrent_time_s / 60.0);
+	printf("VOLT field: %d -> AvgVCell time constant: %.1f s (%.1f min)\r\n", 
+	       volt_field, avgvcell_time_s, avgvcell_time_s / 60.0);
+	printf("MIX field: %d -> Mixing time constant: %.1f s (%.1f hours)\r\n", 
+	       mix_field, mixing_time_s, mixing_time_s / 3600.0);
+	printf("TEMP field: %d -> AvgTA time constant: %.1f s (%.1f min)\r\n", 
+	       temp_field, avgta_time_s, avgta_time_s / 60.0);
+	printf("============================\r\n");
+#endif
 }
 

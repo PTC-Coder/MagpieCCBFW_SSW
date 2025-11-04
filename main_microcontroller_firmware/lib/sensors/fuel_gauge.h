@@ -26,11 +26,15 @@ typedef struct {
     double avg_vcell_voltage;  // Average cell voltage in V
     double current_ma;         // Instantaneous current in mA
     double avg_current_ma;     // Average current in mA
+    double temperature_c;      // Instantaneous temperature in °C
+    double avg_temperature_c;  // Average temperature in °C
     double qh_mah;            // Coulomb counter in mAh
     uint16_t vcell_raw;       // Raw VCell register value
     uint16_t avg_vcell_raw;   // Raw AvgVCell register value
     uint16_t current_raw;     // Raw Current register value
     uint16_t avg_current_raw; // Raw AvgCurrent register value
+    uint16_t temperature_raw; // Raw Temperature register value
+    uint16_t avg_temperature_raw; // Raw AvgTA register value
     uint16_t qh_raw;          // Raw QH register value
 } fuel_gauge_data_t;
 
@@ -132,6 +136,12 @@ int max17261_config_ez(uint32_t timeout_ms);
  * @return      fuel_gauge_data_t structure containing all measurements.
  ****************************************************************************/
 fuel_gauge_data_t Fuel_gauge_data_collect(const char *label);
+
+/**
+ * @brief    max17261_read_filtercfg_debug(). This function reads and displays
+ *           the current FilterCfg register settings for debugging averaging behavior.
+ ****************************************************************************/
+void max17261_read_filtercfg_debug(void);
 
 
 #endif /* MAX17261_H_ */

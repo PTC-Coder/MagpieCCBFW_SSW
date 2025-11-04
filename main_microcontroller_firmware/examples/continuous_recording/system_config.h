@@ -16,7 +16,7 @@
 
 // the length of the WAVE file to write to the SD card, a positive integer, long file durations will tale a long time to write
 // max value 4k seconds, about 70 minutes (we will remove this limitation in the final code, limited for the demo for simplicity).
-#define SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS (1800)  //900
+#define SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS (3600)  //900
 
 // // comment or uncomment sample rates to add them to the test
 // const Audio_Sample_Rate_t sys_sample_rates_to_test[] = {
@@ -29,7 +29,7 @@
 
 // const uint32_t SYS_CONFIG_NUM_SAMPLE_RATES_TO_TEST = sizeof(sys_sample_rates_to_test) / sizeof(sys_sample_rates_to_test[0]);
 
-const uint32_t SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_384kHz;
+const uint32_t SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_48kHz;
 
 // comment or uncomment bit depths to add them to the test
 // const Audio_Bits_Per_Sample_t sys_bit_depths_to_test[] = {
