@@ -254,6 +254,8 @@ int main(void)
 
 void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 {
+    wav_header_clear_metadata();
+
     printf(
         "\n[STARTING]--> %dk %d-bit %d-second %d-channel recording...\n",
         wav_attr->sample_rate / 1000,
