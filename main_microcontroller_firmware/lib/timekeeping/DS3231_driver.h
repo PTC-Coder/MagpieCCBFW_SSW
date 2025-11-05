@@ -50,6 +50,7 @@ typedef struct {
     uint32_t (*read_datetime)(void *buff, void *strbuff);
     uint32_t (*read_temperature)(void *temp);
     uint32_t (*set_datetime)(struct tm *newTime);
+    uint32_t (*set_alarm)(struct tm *newAlarmTime);
 } ds3231_driver_t;
 
 /****************** TypeDef ******************/
@@ -84,6 +85,7 @@ uint32_t ds3231_mx_init(mxc_i2c_regs_t *i2c);
 uint32_t ds3231_read_datetime(void *buff, void *strbuff);
 uint32_t ds3231_read_temperature(void *temp);
 uint32_t ds3231_set_datetime(struct tm * newTime);
+uint32_t ds3231_set_alarm(struct tm * alarmTime);
 
 
 uint32_t DS3231_init(mxc_i2c_regs_t *i2c);
@@ -93,9 +95,7 @@ bool DS3231_testDSPresence(void);
 uint32_t DS3231_getDateTime(struct tm* result, char* datetime_str);
 uint32_t DS3231_getTemperature(float *result);
 uint32_t DS3231_setDateTime(struct tm * newTime);
-
-
-void DS3231_setAlarm(struct tm * alarmTime);
+uint32_t DS3231_setAlarm(struct tm * alarmTime);
 void DS3231_clearInterrupts(void);
 void DS3231_clearDisableInterrupts(void);
 

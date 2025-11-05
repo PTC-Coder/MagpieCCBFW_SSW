@@ -419,10 +419,10 @@ uint32_t DS3231_setDateTime(struct tm * newTime)
 *
 * @param    alarmTime struct tm* pointer to structure containing dleayed start date / time info
 *
-* @returns  none
+* @returns  retCode uint32_t   E_NO_ERROR   0, E_FAIL   -255
 *
 **********************************************************************************************/
-void DS3231_setAlarm(struct tm * alarmTime)
+uint32_t DS3231_setAlarm(struct tm * alarmTime)
 {
   uint8_t highNibble = 0;
   uint8_t lowNibble = 0;
@@ -464,6 +464,7 @@ void DS3231_setAlarm(struct tm * alarmTime)
                                               4))
     {
       ds3231_initialized = false;
+      return E_COMM_ERR;
     }
                                             
     // Enable interrupt function and alarm 1 interrupt
@@ -474,12 +475,14 @@ void DS3231_setAlarm(struct tm * alarmTime)
                                               1))
     {
       ds3231_initialized = false;
+      return E_FAIL;
     }
     
     // Enable GPIO interrupt used by the alarm 
     //TODO:
     //BOARD_setRtcAlarm(ENABLE);
   }
+  return E_NO_ERROR;
 }
 
 /*********************************************************************************************
@@ -685,6 +688,7 @@ ds3231_driver_t DS3231_Open(void)
     SD.read_datetime = ds3231_read_datetime;
     SD.read_temperature = ds3231_read_temperature;
     SD.set_datetime = ds3231_set_datetime;
+    SD.set_alarm = ds3231_set_alarm;
     return SD;
 }
 
@@ -710,6 +714,11 @@ uint32_t ds3231_read_temperature(void *temp)
 uint32_t ds3231_set_datetime(struct tm * newTime)
 {
     return DS3231_setDateTime(newTime);
+}
+
+uint32_t ds3231_set_alarm(struct tm * alarmTime)
+{
+    return DS3231_setAlarm(alarmTime);
 }
 
 #ifdef USE_DEBUG_MENU

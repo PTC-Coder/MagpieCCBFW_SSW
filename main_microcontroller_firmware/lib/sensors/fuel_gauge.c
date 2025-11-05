@@ -672,6 +672,19 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	printf("Avg Current: %.2f mA\r\n", data.avg_current_ma);
 #endif
 
+	//Calculate power (instantaneous power in mW)
+	data.power_mw = data.vcell_voltage * data.current_ma;
+#if defined(ShowPrintFOutput)
+	printf("Power: %.2f mW\r\n", data.power_mw);
+#endif
+
+	//Calculate average power (average power in mW)
+	data.avg_power_mw = data.avg_vcell_voltage * data.avg_current_ma;
+#if defined(ShowPrintFOutput)
+	printf("Avg Power: %.2f mW\r\n", data.avg_power_mw);
+#endif
+
+
 	// Read Temperature (instantaneous temperature in °C)
 	max17261_read_reg(MAX17261_I2C_ADDR, FG_ADDR_TEMP, &max17261_regs[0x00], 2);
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];

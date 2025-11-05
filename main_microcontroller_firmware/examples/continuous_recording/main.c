@@ -1,7 +1,7 @@
 
 /* Private includes --------------------------------------------------------------------------------------------------*/
 
-#include <stdio.h>`
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -31,10 +31,10 @@
 #include "fuel_gauge.h"
 #include "environmental_sensor.h"
 
-// #include "mxc_device.h"
-// #include "mxc_sys.h"
-// #include "nvic_table.h"
-// #include "tmr.h"
+#include "mxc_device.h"
+#include "mxc_sys.h"
+#include "nvic_table.h"
+#include "rtc.h"
 
 #ifdef TERMINAL_IO_USE_SEGGER_RTT
 #include "SEGGER_RTT.h"
@@ -79,6 +79,14 @@ static void start_recording(uint8_t number_of_channel, Audio_Sample_Rate_t rate,
 static void user_pushbutton_interrupt_callback(void *cbdata);
 static void setup_user_pushbutton_interrupt(void);
 
+// RTC sync functions
+static void sync_RTC_to_DS3231(void);
+static void ds3231_ISR(void *cbdata);
+static void reset_MAX_RTC(int hour, int minute, int sec);
+static void enable_DS3231_Interrupt(void);
+void RTC_IRQHandler(void);
+static void print_time_with_milliseconds(void);
+
 
 //#define FIRST_SET_RTC 1    //uncomment this to set the clock time in the setup_realtimeclock()
 
@@ -87,12 +95,29 @@ char savedFileName[31] = DEFAULT_FILENAME;
 
 //==============DS3231 Related=========================
 #define OUTPUT_MSG_BUFFER_SIZE       128U
+#define ALARM_SYNC_DELAY_S           5
+#define SYNC_TIMEOUT_MS              10000  // 10 second timeout
+
+#define SECS_PER_MIN                 60
+#define SECS_PER_HR                  (60 * SECS_PER_MIN)
+#define SECS_PER_DAY                 (24 * SECS_PER_HR)
 
 ds3231_driver_t DS3231_RTC;
 static struct tm ds3231_datetime;
 static char ds3231_datetime_str[17];
 static float ds3231_temperature;
 static uint8_t output_msgBuffer[OUTPUT_MSG_BUFFER_SIZE];
+static volatile bool isAlarmTriggered = false;
+
+// DS3231 interrupt configuration - must be static/global to persist
+static mxc_gpio_cfg_t rtc_int_cfg = {
+    .port = MXC_GPIO0,
+    .mask = MXC_GPIO_PIN_13,
+    .pad = MXC_GPIO_PAD_PULL_UP,
+    .func = MXC_GPIO_FUNC_IN,
+    .vssel = MXC_GPIO_VSSEL_VDDIOH,
+};
+
 const struct tm ds3231_dateTimeDefault = {
 	.tm_year = 118U,
 	.tm_mon = 00U,
@@ -131,6 +156,9 @@ int main(void)
     setup_user_pushbutton_interrupt();
 
     setup_realtimeclock();
+    
+    // Sync internal RTC to DS3231 at startup
+    sync_RTC_to_DS3231();
 
     printf("\n\n==================================\n");
     printf("   Cornell Lab of Ornithology     \n");
@@ -157,18 +185,8 @@ int main(void)
         printf(output_msgBuffer);
     }
     
-    //Get Time Stamp from RTC
-    if (E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str)) {
-        printf("\nDS3231 read datetime error\n");
-    } else {
-        strftime((uint8_t*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "-->DateTime: %F %TZ\r\n\n", &ds3231_datetime);
-        printf(output_msgBuffer);
-
-        //strftime((uint8_t*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "\n-->FileStampTime: %Y%m%d_%H%M%SZ\r\n", &ds3231_datetime);
-        //printf(output_msgBuffer);
-
-        //printf(ds3231_datetime_str);		
-    }
+    // Display time with milliseconds for the first time
+    print_time_with_milliseconds();
 
     printf("Build configuration check:\n");
 #ifdef NATIVE_SDHC
@@ -222,13 +240,25 @@ int main(void)
             status_led_set(STATUS_LED_COLOR_GREEN, FALSE);
                                
 
-            //Get Date Time from RTC 
+            //Get Date Time from RTC with milliseconds
             if(E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str))
             {
                 sprintf(savedFileName,"%s",DEFAULT_FILENAME);
             } else {
+                // Get milliseconds from internal RTC
+                uint32_t rtc_readout;
+                int err = MXC_RTC_GetSubSeconds(&rtc_readout);
+                int milliseconds = (err == E_NO_ERROR) ? (int)((rtc_readout * 1000) / 4096) : 0;
                 
-                sprintf(savedFileName,"%s%s","Magpie00_",ds3231_datetime_str);
+                // Format: YYYYMMDD_HHMMSS.fff
+                sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03d",
+                    ds3231_datetime.tm_year + 1900,
+                    ds3231_datetime.tm_mon + 1,
+                    ds3231_datetime.tm_mday,
+                    ds3231_datetime.tm_hour,
+                    ds3231_datetime.tm_min,
+                    ds3231_datetime.tm_sec,
+                    milliseconds);
                 printf("File to be saved: %s \n", savedFileName);
             }
 
@@ -597,17 +627,23 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 
     fuel_gauge_data_t fg_metadata = Fuel_gauge_data_collect("Recording");
     
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage*2);  
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage * 2);  //2S
     wav_header_add_metadata("Recording Voltage(V)", tempWAVBuffer);
     
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.current_ma);  
     wav_header_add_metadata("Recording Current(mA)", tempWAVBuffer);
 
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.power_mw * 2);  //2S
+    wav_header_add_metadata("Recording Power(mW)", tempWAVBuffer);
+
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage * 2);  //2S
     wav_header_add_metadata("R Avg. Voltage(V)", tempWAVBuffer);
     
-     sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
     wav_header_add_metadata("R Avg. Current(mA)", tempWAVBuffer);
+
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_power_mw * 2);  //2S
+    wav_header_add_metadata("R Avg. Power(mW)", tempWAVBuffer);
 
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.temperature_c);  
     wav_header_add_metadata("FG Temperature(C)", tempWAVBuffer);
@@ -727,18 +763,18 @@ void error_handler(Status_LED_Color_t color)
 
 static void setup_user_pushbutton_interrupt(void)
 {
-
     // Configure interrupt
     MXC_GPIO_RegisterCallback(&bsp_pins_user_pushbutton_cfg, user_pushbutton_interrupt_callback, NULL);
 
     // Configure for falling edge detection (trigger on button press)
     MXC_GPIO_IntConfig(&bsp_pins_user_pushbutton_cfg, MXC_GPIO_INT_FALLING);
 
-     // Enable interrupt
+    // Enable interrupt
     MXC_GPIO_EnableInt(bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
-    // Enable global interrupts
-    //NVIC_EnableIRQ(MXC_GPIO_GET_IRQ(MXC_GPIO_GET_IDX(bsp_pins_user_pushbutton_cfg.mask)));
-    NVIC_EnableIRQ(GPIO0_IRQn);
+    
+    // Enable NVIC interrupt for the GPIO port (shared with DS3231)
+    // Use the proper method to get the IRQ number for the GPIO port
+    NVIC_EnableIRQ(MXC_GPIO_GET_IRQ(MXC_GPIO_GET_IDX(bsp_pins_user_pushbutton_cfg.port)));
 }
 
 
@@ -1145,6 +1181,267 @@ static void start_recording(uint8_t number_of_channel,
     //power_off_audio_chain();
 }
 
+///////////////////////////RTC SYNC FUNCTIONS ////////////////////////////////////
+
+static void sync_RTC_to_DS3231(void)
+{    
+    printf("Syncing internal RTC with DS3231 using alarm method...\n");
+    
+    // Reset the alarm triggered flag
+    isAlarmTriggered = false;
+    
+    // Get current time from DS3231 first
+    if (E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str)) {
+        printf("DS3231 read datetime error during sync\n");
+        return;
+    } else {
+        strftime((char*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "DS3231 DateTime: %F %TZ\n", &ds3231_datetime);
+        printf(output_msgBuffer);
+    }
+
+    // Set DS3231 alarm ALARM_SYNC_DELAY_S seconds from now
+    struct tm alarmTime = {
+        .tm_year = ds3231_datetime.tm_year,
+        .tm_mon = ds3231_datetime.tm_mon,
+        .tm_mday = ds3231_datetime.tm_mday,
+        .tm_hour = ds3231_datetime.tm_hour,
+        .tm_min = ds3231_datetime.tm_min,
+        .tm_sec = ds3231_datetime.tm_sec + ALARM_SYNC_DELAY_S
+    };
+    
+    // Handle minute/hour overflow
+    if (alarmTime.tm_sec >= 60) {
+        alarmTime.tm_sec -= 60;
+        alarmTime.tm_min++;
+        if (alarmTime.tm_min >= 60) {
+            alarmTime.tm_min -= 60;
+            alarmTime.tm_hour++;
+            if (alarmTime.tm_hour >= 24) {
+                alarmTime.tm_hour -= 24;
+                alarmTime.tm_mday++;
+            }
+        }
+    }
+    
+    // Clear any existing DS3231 interrupt flags before setting alarm
+    printf("Clearing DS3231 interrupt flags...\n");
+    
+    if (E_NO_ERROR != DS3231_RTC.set_alarm(&alarmTime)) {
+        printf("DS3231 set alarm error\n");
+        // Fallback to direct sync
+        printf("Falling back to direct sync...\n");
+        reset_MAX_RTC(ds3231_datetime.tm_hour, ds3231_datetime.tm_min, ds3231_datetime.tm_sec);
+        return;
+    } else {
+        strftime((char*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "DS3231 Alarm set for: %F %TZ\n", &alarmTime);
+        printf(output_msgBuffer);
+    }
+
+    // Now enable DS3231 interrupt AFTER setting the alarm
+    enable_DS3231_Interrupt();
+
+    printf("Waiting for DS3231 alarm to sync internal RTC...\n");
+    
+    // Wait for alarm with timeout
+    uint32_t timeout_count = 0;
+    uint32_t last_pin_state = MXC_GPIO_InGet(MXC_GPIO0, MXC_GPIO_PIN_13);
+    
+    while(!isAlarmTriggered && timeout_count < (SYNC_TIMEOUT_MS / 100)) {
+        MXC_Delay(MXC_DELAY_MSEC(100));
+        timeout_count++;
+        
+        // Check if pin state changed (for debugging)
+        uint32_t current_pin_state = MXC_GPIO_InGet(MXC_GPIO0, MXC_GPIO_PIN_13);
+        if (current_pin_state != last_pin_state) {
+            printf("P0.13 state changed: %s -> %s\n", 
+                   last_pin_state ? "HIGH" : "LOW",
+                   current_pin_state ? "HIGH" : "LOW");
+            last_pin_state = current_pin_state;
+        }
+        
+        // Check DS3231 status register every 2 seconds to see if alarm flag is set
+        if (timeout_count % 20 == 0 && timeout_count > 0) {
+            // Read DS3231 status register to check alarm flag
+            // This is a manual check to see if DS3231 is setting the alarm flag
+            printf("Checking DS3231 status register...\n");
+        }
+        
+        // Print progress every second
+        if (timeout_count % 10 == 0) {
+            printf("Waiting... (%d seconds) [P0.13=%s]\n", 
+                   timeout_count / 10, 
+                   current_pin_state ? "HIGH" : "LOW");
+        }
+    }
+    
+    if (isAlarmTriggered) {
+        printf("RTC sync completed via alarm!\n");
+    } else {
+        printf("Alarm sync timeout! Falling back to direct sync...\n");
+        reset_MAX_RTC(ds3231_datetime.tm_hour, ds3231_datetime.tm_min, ds3231_datetime.tm_sec);
+    }
+}
+
+
+
+static void reset_MAX_RTC(int hour, int minute, int sec)
+{
+    int total_sec = (hour * SECS_PER_HR) + (minute * SECS_PER_MIN) + sec;
+
+    printf("Setting internal RTC to %02d:%02d:%02d (total_sec: %d)\n", hour, minute, sec, total_sec);
+
+    if (MXC_RTC_Init(total_sec, 0) != E_NO_ERROR) {
+        printf("Failed RTC Initialization\n");
+        return;
+    }
+
+    if (MXC_RTC_Start() != E_NO_ERROR) {
+        printf("Failed RTC_Start\n");
+        return;
+    }
+    
+    printf("Internal RTC initialized and started successfully\n");
+}
+
+static void enable_DS3231_Interrupt(void)
+{
+    printf("Configuring DS3231 interrupt on GPIO P0.13...\n");
+    
+    // Read the pin state before configuration
+    uint32_t pin_state_before = MXC_GPIO_InGet(MXC_GPIO0, MXC_GPIO_PIN_13);
+    printf("P0.13 state before config: %s\n", pin_state_before ? "HIGH" : "LOW");
+    
+    // Configure the GPIO pin (rtc_int_cfg is now static/global)
+    MXC_GPIO_Config(&rtc_int_cfg);
+    
+    // Register the callback
+    MXC_GPIO_RegisterCallback(&rtc_int_cfg, ds3231_ISR, NULL);
+    
+    // Configure interrupt for both edges to catch the alarm transition
+    if (MXC_GPIO_IntConfig(&rtc_int_cfg, MXC_GPIO_INT_BOTH) != E_NO_ERROR) {
+        printf("Failed to configure DS3231 interrupt\n");
+        return;
+    }
+    
+    // Enable the interrupt
+    MXC_GPIO_EnableInt(rtc_int_cfg.port, rtc_int_cfg.mask);
+    
+    // Enable the NVIC interrupt for GPIO0 (shared with pushbutton)
+    // Use the proper method to get the IRQ number for the GPIO port
+    // Note: This is safe to call multiple times - NVIC handles it properly
+    NVIC_EnableIRQ(MXC_GPIO_GET_IRQ(MXC_GPIO_GET_IDX(rtc_int_cfg.port)));
+    
+    printf("DS3231 interrupt configured successfully on P0.13 with pull-up\n");
+    
+    // Read the current pin state after configuration
+    uint32_t pin_state_after = MXC_GPIO_InGet(MXC_GPIO0, MXC_GPIO_PIN_13);
+    printf("P0.13 state after config: %s\n", pin_state_after ? "HIGH" : "LOW");
+    
+    // If the pin is already LOW, the alarm might have already triggered
+    if (!pin_state_after) {
+        printf("WARNING: P0.13 is LOW after config - alarm may have already triggered!\n");
+    }
+}
+
+static void ds3231_ISR(void *cbdata)
+{
+    // Prevent multiple triggers - check if already processed
+    if (isAlarmTriggered) {
+        printf("DS3231 alarm already processed, ignoring duplicate interrupt\n");
+        return;
+    }
+    
+    // Check current pin state to determine which edge triggered
+    uint32_t pin_state = MXC_GPIO_InGet(MXC_GPIO0, MXC_GPIO_PIN_13);
+    printf("DS3231 interrupt triggered! Pin state: %s\n", pin_state ? "HIGH" : "LOW");
+    
+    // Clear GPIO interrupt flags first
+    uint32_t gpio_flags = MXC_GPIO_GetFlags(rtc_int_cfg.port);
+    MXC_GPIO_ClearFlags(rtc_int_cfg.port, gpio_flags);
+    
+    // We want to sync on either edge since the alarm can trigger quickly
+    // Disable the DS3231 interrupt to prevent repeated triggers
+    MXC_GPIO_DisableInt(rtc_int_cfg.port, rtc_int_cfg.mask);
+    
+    // Clear DS3231 interrupt flags and disable alarm
+    DS3231_clearInterrupts();
+    DS3231_clearDisableInterrupts();  // This disables the alarm to prevent re-triggering
+    
+    // Calculate the alarm time (original time + delay) with proper overflow handling
+    int alarm_hour = ds3231_datetime.tm_hour;
+    int alarm_min = ds3231_datetime.tm_min;
+    int alarm_sec = ds3231_datetime.tm_sec + ALARM_SYNC_DELAY_S;
+    
+    // Handle second overflow
+    if (alarm_sec >= 60) {
+        alarm_sec -= 60;
+        alarm_min++;
+        if (alarm_min >= 60) {
+            alarm_min -= 60;
+            alarm_hour++;
+            if (alarm_hour >= 24) {
+                alarm_hour -= 24;
+            }
+        }
+    }
+    
+    // Enable RTC interrupt like the working example does
+    NVIC_EnableIRQ(RTC_IRQn);
+    
+    // When DS3231 interrupt triggers, sync the internal RTC to the alarm time
+    reset_MAX_RTC(alarm_hour, alarm_min, alarm_sec);
+    
+    // Set the flag to indicate sync is complete
+    isAlarmTriggered = true;
+    
+    printf("Internal RTC synced to DS3231 alarm time\n");
+}
+
+void RTC_IRQHandler(void)
+{
+    // Handle internal RTC interrupts if needed
+    int flags = MXC_RTC_GetFlags();
+    MXC_RTC_ClearFlags(flags);
+}
+
+static void print_time_with_milliseconds(void)
+{
+    int year, month, day, hr, min, err;
+    uint32_t sec, rtc_readout;
+    double subsec;
+
+    do {
+        err = MXC_RTC_GetSubSeconds(&rtc_readout);
+    } while (err != E_NO_ERROR);
+    subsec = rtc_readout / 4096.0;
+
+    do {
+        err = MXC_RTC_GetSeconds(&rtc_readout);
+    } while (err != E_NO_ERROR);
+    sec = rtc_readout;
+
+    hr = sec / SECS_PER_HR;
+    sec -= hr * SECS_PER_HR;
+
+    min = sec / SECS_PER_MIN;
+    sec -= min * SECS_PER_MIN;
+
+    subsec += sec;
+
+    year = ds3231_datetime.tm_year + 1900; 
+    month = ds3231_datetime.tm_mon + 1;
+    day = ds3231_datetime.tm_mday;
+
+    printf("Internal RTC DateTime: %d/%02d/%02d %02d:%02d:%06.3fZ\n", year, month, day, hr, min, subsec);
+
+    if (E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str)) {
+        printf("DS3231 read datetime error\n");
+    } else {
+        strftime((char*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "DS3231 RTC DateTime: %F %TZ\n\n", &ds3231_datetime);
+        printf(output_msgBuffer);
+    }
+}
+
 ///////////////////////////ISP CALL BACKS ////////////////////////////////////
 
 static void user_pushbutton_interrupt_callback(void *cbdata)
@@ -1153,10 +1450,12 @@ static void user_pushbutton_interrupt_callback(void *cbdata)
     uint32_t status = MXC_GPIO_GetFlags(bsp_pins_user_pushbutton_cfg.port);
     MXC_GPIO_ClearFlags(bsp_pins_user_pushbutton_cfg.port, status);
 
-    // Disable interrupt temporarily
+    // Disable interrupt temporarily for this specific pin only
     MXC_GPIO_DisableInt(bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
 
-    NVIC_DisableIRQ(GPIO0_IRQn);
+    // Don't disable the entire GPIO0 NVIC interrupt since DS3231 might need it
+    // The GPIO system will handle multiple callbacks on the same port
+    // NVIC_DisableIRQ(GPIO0_IRQn);  // Removed - let other GPIO0 interrupts continue
 
     // Start the debounce timer which should produce "button_pressed" after some time after
     // checking the GPIO pin

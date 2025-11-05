@@ -26,6 +26,8 @@ typedef struct {
     double avg_vcell_voltage;  // Average cell voltage in V
     double current_ma;         // Instantaneous current in mA
     double avg_current_ma;     // Average current in mA
+    double power_mw;           // Instantaneous power in mW
+    double avg_power_mw;       // Average power in mW
     double temperature_c;      // Instantaneous temperature in °C
     double avg_temperature_c;  // Average temperature in °C
     double qh_mah;            // Coulomb counter in mAh
