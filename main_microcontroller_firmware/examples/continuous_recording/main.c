@@ -29,6 +29,7 @@
 
 #include "icc.h"
 #include "fuel_gauge.h"
+#include "environmental_sensor.h"
 
 // #include "mxc_device.h"
 // #include "mxc_sys.h"
@@ -612,6 +613,34 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_temperature_c);  
     wav_header_add_metadata("FG Avg. Temperature(C)", tempWAVBuffer);
 
+    //=================== Get Environmental Sensor data ========================
+    bme688_data_t sensor_data = bme688_read_all_data("Recording");
+        
+    if (sensor_data.valid_data) 
+    {
+        float sensor_temperature = sensor_data.temperature_c;
+        float sensor_pressure_pa = sensor_data.pressure_pa; // Get pressure in Pascals
+        float sensor_pressure_psi = sensor_pressure_pa * 0.000145038f; // Convert Pa to PSI (1 Pa = 0.000145038 PSI)
+        float sensor_pressure_atm = sensor_pressure_pa / 101325.0f; // Convert Pa to ATM (1 ATM = 101325 Pa)
+        float sensor_humidity = sensor_data.humidity_percent;
+        float sensor_gas_resistance = sensor_data.gas_resistance_ohm;
+        
+        sprintf(tempWAVBuffer, "%.2f", sensor_temperature);
+        wav_header_add_metadata("Sensor T(C)", tempWAVBuffer);
+
+        sprintf(tempWAVBuffer, "%.3f", sensor_pressure_psi);
+        wav_header_add_metadata("Sensor P(psi)", tempWAVBuffer);
+
+        sprintf(tempWAVBuffer, "%.4f", sensor_pressure_atm);
+        wav_header_add_metadata("Sensor P(atm)", tempWAVBuffer);
+
+        sprintf(tempWAVBuffer, "%.2f", sensor_humidity);
+        wav_header_add_metadata("Sensor H(%%RH)", tempWAVBuffer);
+
+        sprintf(tempWAVBuffer, "%.0f", sensor_gas_resistance);
+        wav_header_add_metadata("Sensor Gas R(ohms)", tempWAVBuffer);
+    }
+
     //====== Stop ADC and DMA =============
 
     ad4630_384kHz_fs_clk_and_cs_stop();
@@ -862,6 +891,20 @@ static void initialize_system(void)
     }
 
     MXC_Delay(MXC_DELAY_MSEC(5)); //Allow RTT to output and clear buffer data
+
+    //////////////////// Environmental Sensor ////////////
+     // Initialize BME688 sensor
+    if (E_NO_ERROR != bme688_init()) {
+        printf("[ERROR]--> BME688 init failed\n");
+    }
+    else
+    {
+    printf("[SUCCESS] --> BME688 initialized\n");
+    }
+
+    // Brief delay after initialization
+    MXC_Delay(100000);
+
 
     ////////////////////  AUDIO INIT ////////////////////
 
