@@ -137,15 +137,17 @@ int main(void)
     printf("       K. Lisa Yang Center       \n");
     printf("   For Conservation Bioacoustics    \n");
     printf("==================================\n");
+    fflush(stdout);
     printf(" __  __                   _      \n");
     printf("|  \\/  | __ _  __ _ _ __ (_) ___ \n");
     printf("| |\\/| |/ _` |/ _` | \'_ \\| |/ _ \\\n");
     printf("| |  | | (_| | (_| | |_) | |  __/\n");
     printf("|_|  |_|\\__,_|\\__, | .__/|_|\\___|\n");
     printf("              |___/|_|           \n\n");
-    printf("==================================\n\n\n");
+    printf("==================================\n");
+    fflush(stdout);
 
-    MXC_Delay(MXC_DELAY_MSEC(5)); //Allow RTT to output and clear buffer data
+    MXC_Delay(MXC_DELAY_MSEC(500)); //Allow RTT to output and clear buffer data
 
     //Get Temperature from RTC
     if (E_NO_ERROR != DS3231_RTC.read_temperature(&ds3231_temperature)) {
@@ -159,10 +161,10 @@ int main(void)
     if (E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str)) {
         printf("\nDS3231 read datetime error\n");
     } else {
-        strftime((uint8_t*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "\n-->DateTime: %F %TZ\r\n", &ds3231_datetime);
+        strftime((uint8_t*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "-->DateTime: %F %TZ\r\n\n", &ds3231_datetime);
         printf(output_msgBuffer);
 
-        strftime((uint8_t*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "\n-->FileStampTime: %Y%m%d_%H%M%SZ\r\n", &ds3231_datetime);
+        //strftime((uint8_t*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "\n-->FileStampTime: %Y%m%d_%H%M%SZ\r\n", &ds3231_datetime);
         //printf(output_msgBuffer);
 
         //printf(ds3231_datetime_str);		
@@ -891,6 +893,7 @@ static void initialize_system(void)
     }
 
     MXC_Delay(MXC_DELAY_MSEC(5)); //Allow RTT to output and clear buffer data
+    fflush(stdout);
 
     //////////////////// Environmental Sensor ////////////
      // Initialize BME688 sensor
