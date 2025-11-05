@@ -374,7 +374,7 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
             wav_header_add_metadata("Error", "DMA Overrun");
             //error_handler(STATUS_LED_COLOR_BLUE);
               //error_handler(STATUS_LED_COLOR_BLUE);
-            num_dma_blocks_consumed = num_dma_blocks_in_the_file;  // stop recording this run and exit the loop
+            //num_dma_blocks_consumed = num_dma_blocks_in_the_file;  // stop recording this run and exit the loop
             //audio_dma_clear_overrun(AUDIO_CHANNEL_0);
             //audio_dma_clear_overrun(AUDIO_CHANNEL_1);
             //we'll start over with the net
@@ -603,6 +603,9 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage*2);  
     wav_header_add_metadata("R Avg. Voltage(V)", tempWAVBuffer);
     
+     sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
+    wav_header_add_metadata("R Avg. Current(mA)", tempWAVBuffer);
+
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.temperature_c);  
     wav_header_add_metadata("FG Temperature(C)", tempWAVBuffer);
 
