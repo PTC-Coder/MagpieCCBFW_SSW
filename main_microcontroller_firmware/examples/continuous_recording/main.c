@@ -35,6 +35,7 @@
 #include "mxc_sys.h"
 #include "nvic_table.h"
 #include "rtc.h"
+#include "time_helpers.h"
 
 #ifdef TERMINAL_IO_USE_SEGGER_RTT
 #include "SEGGER_RTT.h"
@@ -104,7 +105,9 @@ char savedFileName[31] = DEFAULT_FILENAME;
 
 ds3231_driver_t DS3231_RTC;
 static struct tm ds3231_datetime;
+static struct tm_ms internal_RTC_datetime;
 static char ds3231_datetime_str[17];
+static char internal_RTC_datetime_str[20];
 static float ds3231_temperature;
 static uint8_t output_msgBuffer[OUTPUT_MSG_BUFFER_SIZE];
 static volatile bool isAlarmTriggered = false;
@@ -250,8 +253,8 @@ int main(void)
                 int err = MXC_RTC_GetSubSeconds(&rtc_readout);
                 int milliseconds = (err == E_NO_ERROR) ? (int)((rtc_readout * 1000) / 4096) : 0;
                 
-                // Format: YYYYMMDD_HHMMSS.fff
-                sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03d",
+                // Format: YYYYMMDD_HHMMSS.fffZ
+                sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03dZ",
                     ds3231_datetime.tm_year + 1900,
                     ds3231_datetime.tm_mon + 1,
                     ds3231_datetime.tm_mday,
@@ -673,7 +676,7 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
         wav_header_add_metadata("Sensor P(atm)", tempWAVBuffer);
 
         sprintf(tempWAVBuffer, "%.2f", sensor_humidity);
-        wav_header_add_metadata("Sensor H(%%RH)", tempWAVBuffer);
+        wav_header_add_metadata("Sensor H(%RH)", tempWAVBuffer);
 
         sprintf(tempWAVBuffer, "%.0f", sensor_gas_resistance);
         wav_header_add_metadata("Sensor Gas R(ohms)", tempWAVBuffer);
@@ -1384,13 +1387,13 @@ static void ds3231_ISR(void *cbdata)
             }
         }
     }
-    
-    // Enable RTC interrupt like the working example does
-    NVIC_EnableIRQ(RTC_IRQn);
-    
+
     // When DS3231 interrupt triggers, sync the internal RTC to the alarm time
     reset_MAX_RTC(alarm_hour, alarm_min, alarm_sec);
     
+    // Enable RTC interrupt 
+    NVIC_EnableIRQ(RTC_IRQn);    
+        
     // Set the flag to indicate sync is complete
     isAlarmTriggered = true;
     
@@ -1403,6 +1406,38 @@ void RTC_IRQHandler(void)
     int flags = MXC_RTC_GetFlags();
     MXC_RTC_ClearFlags(flags);
 }
+
+static uint32_t get_internal_RTC_time(void *buff, void *strbuff)
+{
+    struct tm_ms *timeinfo = (struct tm_ms *)buff;
+    char *time_str = (char *)strbuff;
+
+
+    uint32_t sec, rtc_readout;
+    int err;
+
+    do {
+        err = MXC_RTC_GetSeconds(&rtc_readout);
+    } while (err != E_NO_ERROR);  //TODO: add timeout
+    sec = rtc_readout;
+
+    timeinfo->tm_hour = sec / SECS_PER_HR;
+    sec -= timeinfo->tm_hour * SECS_PER_HR;
+
+    timeinfo->tm_min = sec / SECS_PER_MIN;
+    sec -= timeinfo->tm_min * SECS_PER_MIN;
+
+    timeinfo->tm_sec = sec;
+
+    timeinfo->tm_subsec += sec;
+
+    // Format time as string
+    strftime(time_str, 25, "%Y-%m-%dT%H:%M:%S.2fZ", timeinfo);
+    sprintf(time_str + 19, ".%03dZ", (int)(timeinfo->tm_subsec * 1000));  
+
+    return E_NO_ERROR;
+}
+
 
 static void print_time_with_milliseconds(void)
 {

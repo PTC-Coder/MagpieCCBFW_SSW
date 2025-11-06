@@ -14,7 +14,7 @@
 
 /* Public types ------------------------------------------------------------------------------------------------------*/
 
-// typedef so we don't need to write "struct" each time
+// typedef so we don't need to write "struct" each time for tm type
 typedef struct tm tm_t;
 
 /**

@@ -20,6 +20,11 @@ int bsp_spixf_init()
     int err;
     MXC_GPIO_Config(&bsp_pins_spixf_active_cfg);
 
+    //Turn on the clocks for SPIXF and XIP ICACHE
+    MXC_SYS_ClockEnable(MXC_SYS_PERIPH_CLOCK_SPIXIP); // SPIX
+    MXC_SYS_ClockEnable(MXC_SYS_PERIPH_CLOCK_SPIXFC); // SPIXFC
+    MXC_SYS_ClockEnable(MXC_SYS_PERIPH_CLOCK_ICACHEXIP); // XIP ICACHE
+
     // Initialize SPIXF with fast read command and baud rate
     // err = MXC_SPIXF_Init(BSP_SPIXF_READ_CMD, BSP_SPIXF_BAUD_RATE);
     // if (err != E_NO_ERROR) {
