@@ -60,11 +60,19 @@ VPATH += ../../lib/sensors/
 IPATH += ../../lib/timekeeping/
 VPATH += ../../lib/timekeeping/
 
+IPATH += ../../lib/ext_memory/
+VPATH += ../../lib/ext_memory/
+
 IPATH += ../../lib/utils/
 VPATH += ../../lib/utils/
 
 IPATH += ../../third_party/minmea/
 VPATH += ../../third_party/minmea/
+
+IPATH += ../../third_party/littlefs/
+VPATH += ../../third_party/littlefs/
+
+
 PROJ_CFLAGS += -Dtimegm=mktime # needed for the minmea lib
 
 PROJ_LDFLAGS += -Wl,--print-memory-usage
