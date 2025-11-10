@@ -166,11 +166,11 @@ int main(void)
         }
 
         // Brief delay between measurements
-        printf("Next reading in 1 second...\r\n\n");
+        printf("Next reading in 5 second...\r\n\n");
         fflush(stdout);
         
         // 1 second delay between measurements
-        MXC_Delay(MXC_DELAY_SEC(1)); // 1 second delay
+        MXC_Delay(MXC_DELAY_SEC(5)); // 1 second delay
         
         // Brief activity indication
         status_led_set(STATUS_LED_COLOR_BLUE, true);

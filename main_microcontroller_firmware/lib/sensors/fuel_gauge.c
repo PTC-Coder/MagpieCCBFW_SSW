@@ -35,7 +35,7 @@
 #define tte_min 1.5			// Bits 9:4 unit = 1.5 minutes
 #define tte_sec 5.625			// Bits 3:0 unit = 5.625 seconds
 
-#define CURRENT_REG_RES 1562.5  //This is for >4000 mAh capacity please refere to page 23 of the https://www.analog.com/media/en/technical-documentation/data-sheets/max17261.pdf
+#define CURRENT_REG_RES 781.25  //This is for 2mΩ sense resistor (R118) - supports up to 71Ah capacity per schematic
 #define VCELL_LSB 0.000078125  //16-bit register 7.8125 uV per lsb (0.0V to 5.11992V)  Table 2 in MAX17261.pdf
 #define TTE_LSB  0.0015625 // (5.625 / 3600.0)  // Convert seconds to hours: 5.625s ÷ 3600s/hr = 0.0015625 hours
 #define TEMP_LSB 0.00390625 // Temperature LSB = 1/256°C per bit (from user's guide Table 3)

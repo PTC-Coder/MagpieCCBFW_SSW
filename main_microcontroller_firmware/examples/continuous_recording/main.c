@@ -87,6 +87,7 @@ static void reset_MAX_RTC(int hour, int minute, int sec);
 static void enable_DS3231_Interrupt(void);
 void RTC_IRQHandler(void);
 static void print_time_with_milliseconds(void);
+static uint32_t get_internal_RTC_time(void *buff, void *strbuff);
 
 
 //#define FIRST_SET_RTC 1    //uncomment this to set the clock time in the setup_realtimeclock()
@@ -243,31 +244,30 @@ int main(void)
             status_led_set(STATUS_LED_COLOR_GREEN, FALSE);
                                
 
+            //re-enable button (this is for checking a stop in the middle of recording)
+            pushbuttons_init();
+            setup_user_pushbutton_interrupt();
+
             //Get Date Time from RTC with milliseconds
             if(E_NO_ERROR != DS3231_RTC.read_datetime(&ds3231_datetime, ds3231_datetime_str))
             {
                 sprintf(savedFileName,"%s",DEFAULT_FILENAME);
             } else {
                 // Get milliseconds from internal RTC
-                uint32_t rtc_readout;
-                int err = MXC_RTC_GetSubSeconds(&rtc_readout);
-                int milliseconds = (err == E_NO_ERROR) ? (int)((rtc_readout * 1000) / 4096) : 0;
+   
+                get_internal_RTC_time(&internal_RTC_datetime, internal_RTC_datetime_str);
                 
                 // Format: YYYYMMDD_HHMMSS.fffZ
                 sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03dZ",
                     ds3231_datetime.tm_year + 1900,
                     ds3231_datetime.tm_mon + 1,
                     ds3231_datetime.tm_mday,
-                    ds3231_datetime.tm_hour,
-                    ds3231_datetime.tm_min,
-                    ds3231_datetime.tm_sec,
-                    milliseconds);
+                    internal_RTC_datetime.tm_hour,
+                    internal_RTC_datetime.tm_min,
+                    internal_RTC_datetime.tm_sec,
+                    internal_RTC_datetime.tm_subsec);
                 printf("File to be saved: %s \n", savedFileName);
             }
-
-            //re-enable button (this is for checking a stop in the middle of recording)
-            pushbuttons_init();
-            setup_user_pushbutton_interrupt();
 
             start_recording(SYS_CONFIG_NUM_CHANNEL, SYS_CONFIG_SAMPLE_RATE,
                             SYS_CONFIG_NUM_BIT_DEPTH,
@@ -304,6 +304,22 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 
     // a string buffer to write file names into
     char file_name_buff[64];
+
+    //Get Time from RTC with milliseconds again to get the most accurate time stamp
+
+ 
+    if (!E_NO_ERROR == get_internal_RTC_time(&internal_RTC_datetime, internal_RTC_datetime_str))
+    {
+    // Format: YYYYMMDD_HHMMSS.fffZ
+    sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03dZ",
+        ds3231_datetime.tm_year + 1900,
+        ds3231_datetime.tm_mon + 1,
+        ds3231_datetime.tm_mday,
+        internal_RTC_datetime.tm_hour,
+        internal_RTC_datetime.tm_min,
+        internal_RTC_datetime.tm_sec,
+        internal_RTC_datetime.tm_subsec);        
+    }
 
     // derive the file name from the input parameters
     sprintf(
@@ -1155,9 +1171,7 @@ static void start_recording(uint8_t number_of_channel,
         printf("[INFO]--> SD card Total Space: %llu Bytes\n", disk_size);
         printf("[INFO]--> SD card Free Space: %llu Bytes\n", disk_free);
         
-    }
-
-    
+    }       
 
     Wave_Header_Attributes_t wav_attr = {
         .num_channels =  number_of_channel,
@@ -1420,7 +1434,6 @@ static uint32_t get_internal_RTC_time(void *buff, void *strbuff)
         err = MXC_RTC_GetSeconds(&rtc_readout);
     } while (err != E_NO_ERROR);  //TODO: add timeout
     sec = rtc_readout;
-
     timeinfo->tm_hour = sec / SECS_PER_HR;
     sec -= timeinfo->tm_hour * SECS_PER_HR;
 

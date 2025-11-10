@@ -443,8 +443,8 @@ int bme688_configure(void)
     result = bme688_write_reg(BME688_I2C_ADDR, BME688_REG_GAS_WAIT_0, &config_data, 1);
     if (result != E_NO_ERROR) return result;
     
-    // Step 6: Configure gas control (heater step 0, gas measurement enabled)
-    config_data = 0x20; // run_gas[5] = 1, nb_conv[3:0] = 0000 (heater step 0)
+    // Step 6: Configure gas control (heater DISABLED, gas measurement enabled)
+    config_data = 0x00; // run_gas[5] = 0 (heater OFF), nb_conv[3:0] = 0000 (heater step 0)
     result = bme688_write_reg(BME688_I2C_ADDR, BME688_REG_CTRL_GAS_1, &config_data, 1);
     if (result != E_NO_ERROR) return result;
     

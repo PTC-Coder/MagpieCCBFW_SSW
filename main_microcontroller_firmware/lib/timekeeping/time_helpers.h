@@ -17,6 +17,28 @@
 // typedef so we don't need to write "struct" each time for tm type
 typedef struct tm tm_t;
 
+struct tm_ms
+{
+  int 	tm_subsec; // milliseconds
+  int	tm_sec;
+  int	tm_min;
+  int	tm_hour;
+  int	tm_mday;
+  int	tm_mon;
+  int	tm_year;
+  int	tm_wday;
+  int	tm_yday;
+  int	tm_isdst;
+#ifdef __TM_GMTOFF
+  long	__TM_GMTOFF;
+#endif
+#ifdef __TM_ZONE
+  const char *__TM_ZONE;
+#endif
+};
+
+typedef struct tm_ms tm_ms_t;
+
 /**
  * @brief enumerated clock time comparison results are represented here. Two time can be equal, or the left-hand-side
  * of the comparison can be earlier or later than the right-hand-side of the comparison.

@@ -25,7 +25,7 @@
 
 /*defintions -------------------------------------------------------------------------------------*/
 #define ShowPrintFOutput 1//Comment this if you want to disable printf
-
+#define console 1
 
 /*globals -------------------------------------------------------------------------------------*/
 
@@ -185,6 +185,13 @@ int main(void)
 
           // Read and display fuel gauge data
           fuel_gauge_data_t before_data = Fuel_gauge_data_collect("Before");
+
+          printf("Current mA: %.2f mA, Voltage: %.3f V, Power: %.2f mW\n", 
+                 before_data.current_ma, before_data.vcell_voltage, before_data.power_mw);
+
+          printf("Avg. Current mA: %.2f mA, Avg. Volatge: %.3f V, Avg. Power: %.2f mW\n", 
+                 before_data.avg_current_ma, before_data.avg_vcell_voltage, before_data.avg_power_mw);
+            
           
 #if defined(console)
           printf("About to enter low power sleep...\r\n");
@@ -207,8 +214,15 @@ int main(void)
           double current_change = after_data.current_ma - before_data.current_ma;
           
 #if defined(console)
-          printf("Analysis: Voltage change = %.3f V, Current change = %.2f mA\r\n", 
-                 voltage_change, current_change);
+
+            printf("Current mA: %.2f mA, Voltage: %.3f V, Power: %.2f mW\n", 
+                 after_data.current_ma, after_data.vcell_voltage, after_data.power_mw);
+
+            printf("Avg. Current mA: %.2f mA, Avg. Volatge: %.3f V, Avg. Power: %.2f mW\n", 
+                    after_data.avg_current_ma, after_data.avg_vcell_voltage, after_data.avg_power_mw);
+
+            printf("Analysis: Voltage change = %.3f V, Current change = %.2f mA\r\n", 
+                    voltage_change, current_change);
 #endif
             
             // Brief LED indication only
