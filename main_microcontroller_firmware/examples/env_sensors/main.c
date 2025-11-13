@@ -122,13 +122,19 @@ int main(void)
     }
     printf("Starting continuous environmental monitoring...\r\n\n");
 
-    // Main measurement loop
+    // Main measurement loop with power-efficient single readings
+    uint32_t reading_count = 0;
+    
     while (1) {
+        reading_count++;
+        
         // Turn off LEDs to save power
         status_led_all_off();
 
-        // Read all sensor data
-        bme688_data_t sensor_data = bme688_read_all_data("Main Loop");
+        printf("=== Reading #%lu ===\r\n", reading_count);
+        
+        // Single sensor reading (BME688 will automatically return to sleep after measurement)
+        bme688_data_t sensor_data = bme688_read_all_data("Power-Efficient Reading");
         
         if (sensor_data.valid_data) {
             // Display comprehensive sensor data
@@ -137,20 +143,26 @@ int main(void)
             // Analyze air quality based on gas resistance
             analyze_air_quality(sensor_data.gas_resistance_ohm);
             
-            // Individual sensor readings for specific use cases
-            float temperature = bme688_read_temperature();
-            float pressure_pa = bme688_read_pressure(); // Get pressure in Pascals
-            float pressure_psi = pressure_pa * 0.000145038f; // Convert Pa to PSI (1 Pa = 0.000145038 PSI)
-            float pressure_atm = pressure_pa / 101325.0f; // Convert Pa to ATM (1 ATM = 101325 Pa)
-            float humidity = bme688_read_humidity();
-            float gas_resistance = bme688_read_gas_resistance();
+            // Convert pressure to different units for display
+            float pressure_psi = sensor_data.pressure_pa * 0.000145038f; // Convert Pa to PSI
+            float pressure_atm = sensor_data.pressure_pa / 101325.0f; // Convert Pa to ATM
+            float pressure_hpa = sensor_data.pressure_pa / 100.0f; // Convert Pa to hPa
             
-            printf("=== Individual Readings ===\r\n");
-            printf("Temperature: %.2f C\r\n", temperature);
-            printf("Pressure: %.3f PSI (%.4f ATM)\r\n", pressure_psi, pressure_atm);
-            printf("Humidity: %.2f %%RH\r\n", humidity);
-            printf("Gas Resistance: %.0f Ohms\r\n", gas_resistance);
-            printf("============================\r\n\n");
+            // Calculate sea level pressure for weather monitoring (Ithaca, NY is ~400 ft elevation)
+            float elevation_m = 122.0f; // Ithaca elevation in meters
+            float sea_level_hpa = pressure_hpa * powf(1.0f + (0.0065f * elevation_m / 288.15f), 5.255f);
+            
+            printf("=== Summary ===\r\n");
+            printf("Temperature: %.2f°C (%.1f°F)\r\n", sensor_data.temperature_c, sensor_data.temperature_c * 9.0f/5.0f + 32.0f);
+            printf("Pressure: %.1f hPa (%.3f PSI, %.4f ATM)\r\n", pressure_hpa, pressure_psi, pressure_atm);
+            printf("Sea Level Pressure: %.1f hPa (for weather comparison)\r\n", sea_level_hpa);
+            printf("Humidity: %.1f%%RH\r\n", sensor_data.humidity_percent);
+            printf("Gas Resistance: %.0f Ohms\r\n", sensor_data.gas_resistance_ohm);
+            printf("Gas Status: Valid=%s, Heat Stable=%s\r\n", 
+                   sensor_data.gas_valid ? "Yes" : "No", 
+                   sensor_data.heat_stable ? "Yes" : "No");
+            printf("Location: Ithaca, NY (~400 ft elevation)\r\n");
+            printf("===============\r\n\n");
             
             // Brief success indication
             status_led_set(STATUS_LED_COLOR_GREEN, true);
@@ -165,14 +177,19 @@ int main(void)
             status_led_set(STATUS_LED_COLOR_RED, false);
         }
 
-        // Brief delay between measurements
-        printf("Next reading in 5 second...\r\n\n");
+        // Power-efficient sleep between measurements
+        printf("BME688 in sleep mode - minimal power consumption\r\n");
+        printf("Next reading in 10 seconds...\r\n\n");
         fflush(stdout);
         
-        // 1 second delay between measurements
-        MXC_Delay(MXC_DELAY_SEC(5)); // 1 second delay
+        // Turn off all LEDs for maximum power savings during sleep
+        status_led_all_off();
         
-        // Brief activity indication
+        // 10 second delay between measurements for power efficiency
+        // During this time, BME688 is in sleep mode consuming <1µA
+        MXC_Delay(MXC_DELAY_SEC(10));
+        
+        // Brief activity indication before next reading
         status_led_set(STATUS_LED_COLOR_BLUE, true);
         MXC_Delay(100000); // 100ms
         status_led_set(STATUS_LED_COLOR_BLUE, false);

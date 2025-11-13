@@ -22,8 +22,10 @@
  * @brief Structure to hold fuel gauge measurement data
  */
 typedef struct {
-    double vcell_voltage;      // Instantaneous cell voltage in V
-    double avg_vcell_voltage;  // Average cell voltage in V
+    double vcell_voltage;      // Instantaneous cell voltage in V (per cell)
+    double avg_vcell_voltage;  // Average cell voltage in V (per cell)
+    double pack_voltage;       // Instantaneous pack voltage in V (vcell_voltage * 2 for 2S)
+    double avg_pack_voltage;   // Average pack voltage in V (avg_vcell_voltage * 2 for 2S)
     double current_ma;         // Instantaneous current in mA
     double avg_current_ma;     // Average current in mA
     double power_mw;           // Instantaneous power in mW
@@ -144,6 +146,26 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label);
  *           the current FilterCfg register settings for debugging averaging behavior.
  ****************************************************************************/
 void max17261_read_filtercfg_debug(void);
+
+/**
+ * @brief    max17261_read_device_id(). This function reads the device ID register
+ *           to verify communication with the MAX17261.
+ * @return   Device ID as uint16_t, or 0 if read failed.
+ ****************************************************************************/
+uint16_t max17261_read_device_id(void);
+
+/**
+ * @brief    max17261_read_current_calibration(). This function reads and displays
+ *           the current calibration registers (CGain and COff) for debugging.
+ ****************************************************************************/
+void max17261_read_current_calibration(void);
+
+/**
+ * @brief    max17261_set_current_gain(). This function sets the current gain calibration.
+ * @param[in] gain_value. CGain register value (0x0400 = no adjustment, default)
+ * @return   E_SUCCESS if successful, E_FAIL if failed.
+ ****************************************************************************/
+int max17261_set_current_gain(uint16_t gain_value);
 
 
 #endif /* MAX17261_H_ */

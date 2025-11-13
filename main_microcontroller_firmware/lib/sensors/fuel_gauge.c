@@ -35,7 +35,8 @@
 #define tte_min 1.5			// Bits 9:4 unit = 1.5 minutes
 #define tte_sec 5.625			// Bits 3:0 unit = 5.625 seconds
 
-#define CURRENT_REG_RES 781.25  //This is for 2mΩ sense resistor (R118) - supports up to 71Ah capacity per schematic
+#define CURRENT_REG_RES 781.25  //This is for 2mΩ sense resistor - 1.5625µV/0.002Ω = 0.78125mA per LSB
+#define CAPACITY_LSB 2.5       //Capacity LSB for 0.002Ω sense resistor: 5µVh/0.002Ω = 2.5mAh per LSB
 #define VCELL_LSB 0.000078125  //16-bit register 7.8125 uV per lsb (0.0V to 5.11992V)  Table 2 in MAX17261.pdf
 #define TTE_LSB  0.0015625 // (5.625 / 3600.0)  // Convert seconds to hours: 5.625s ÷ 3600s/hr = 0.0015625 hours
 #define TEMP_LSB 0.00390625 // Temperature LSB = 1/256°C per bit (from user's guide Table 3)
@@ -54,9 +55,9 @@ uint8_t max17261_regs[256]; // For holding register value to read or write
 enum masks
 {
 	ModelCfg = 0x8000, 
-	DesignCap = 0x1950,   // 32400 mAh (2S6P with 5400 mAh per cell: 6480 decimal = 0x1950)
-	IChgTerm = 0x01C0,
-	VEmpty = 0xA061,   //3.2 V Empty / 3.88 V Recovery
+	DesignCap = 0x000D,   // 33 mAh: 33/2.5 = 13.2 ≈ 13 decimal = 0x000D (for 0.002Ω sense resistor)
+	IChgTerm = 0x0003,    // Charge termination current: ~7.5mA (3 * 2.5mAh = 7.5mA for small battery)
+	VEmpty = 0xA061,      // 3.2 V Empty / 3.88 V Recovery (keep existing)
 	POR_BIT = 0x0002,
 	DNR_BIT = 0x0001,
 	FilterCfg_Default = 0xCEA9,  // Modified FilterCfg: CURR=9 for 3-minute AvgCurrent time constant
@@ -94,6 +95,10 @@ typedef enum uint8_t
 	QRTable30_addr = 0x42u,
 	RComp0_addr = 0x38u,
 	TempCo_addr = 0x39u,
+
+	// Current calibration registers
+	CGain_addr = 0x2Eu,
+	COff_addr = 0x2Fu,
 
 	// Fuel gauge parameter other can be found in
 	// https://www.analog.com/media/en/technical-documentation/user-guides/max1726x-modelgauge-m5-ez-user-guide.pdf
@@ -571,7 +576,7 @@ double max17261_calculate_tte_manual(void)
 	avgcurrent_signed = (int16_t)avgcurrent_raw;
 	
 	// Convert to actual values
-	double remaining_capacity_mah = (double)repcap_raw * 5.0; // 5mAh per LSB with 1mΩ sense resistor
+	double remaining_capacity_mah = (double)repcap_raw * CAPACITY_LSB; // 2.5mAh per LSB with 2mΩ sense resistor
 	double avg_current_ma = (double)avgcurrent_signed * CURRENT_REG_RES / 1000.0;
 	
 	double tte_hours = 0.0;
@@ -613,10 +618,10 @@ void max17261_read_capacity_debug(void)
 	
 #if defined(ShowPrintFOutput)
 	printf("=== Capacity Debug Info ===\r\n");
-	printf("DesignCap: 0x%04X (%d) = %d mAh\r\n", designcap, designcap, designcap * 5);
-	printf("FullCapRep: 0x%04X (%d) = %d mAh\r\n", fullcaprep, fullcaprep, fullcaprep * 5);
-	printf("FullCap: 0x%04X (%d) = %d mAh\r\n", fullcap, fullcap, fullcap * 5);
-	printf("RepCap: 0x%04X (%d) = %d mAh\r\n", repcap, repcap, repcap * 5);
+	printf("DesignCap: 0x%04X (%d) = %.1f mAh\r\n", designcap, designcap, designcap * CAPACITY_LSB);
+	printf("FullCapRep: 0x%04X (%d) = %.1f mAh\r\n", fullcaprep, fullcaprep, fullcaprep * CAPACITY_LSB);
+	printf("FullCap: 0x%04X (%d) = %.1f mAh\r\n", fullcap, fullcap, fullcap * CAPACITY_LSB);
+	printf("RepCap: 0x%04X (%d) = %.1f mAh\r\n", repcap, repcap, repcap * CAPACITY_LSB);
 	printf("RepSOC: %d%%\r\n", repsoc);
 	printf("Calculated SOC: %.1f%% (RepCap/FullCapRep)\r\n", (float)repcap * 100.0 / fullcaprep);
 	printf("===========================\r\n");
@@ -639,8 +644,9 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 	data.vcell_raw = tempdata;
 	data.vcell_voltage = (double)tempdata * VCELL_LSB;
+	data.pack_voltage = data.vcell_voltage * 2.0; // 2S pack voltage
 #if defined(ShowPrintFOutput)
-	printf("VCell: %.3f V\r\n", data.vcell_voltage);
+	printf("VCell: %.3f V, Pack: %.3f V (raw: 0x%04X = %d)\r\n", data.vcell_voltage, data.pack_voltage, tempdata, tempdata);
 #endif
 
 	// Read AvgVCell (average cell voltage)
@@ -648,8 +654,9 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 	data.avg_vcell_raw = tempdata;
 	data.avg_vcell_voltage = (double)tempdata * VCELL_LSB;
+	data.avg_pack_voltage = data.avg_vcell_voltage * 2.0; // 2S pack voltage
 #if defined(ShowPrintFOutput)
-	printf("Avg VCell: %.3f V\r\n", data.avg_vcell_voltage);
+	printf("Avg VCell: %.3f V, Avg Pack: %.3f V (raw: 0x%04X = %d)\r\n", data.avg_vcell_voltage, data.avg_pack_voltage, tempdata, tempdata);
 #endif
 
 	// Read Current (instantaneous current in mA)
@@ -672,16 +679,16 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	printf("Avg Current: %.2f mA\r\n", data.avg_current_ma);
 #endif
 
-	//Calculate power (instantaneous power in mW)
-	data.power_mw = data.vcell_voltage * data.current_ma;
+	//Calculate power (instantaneous power in mW) - using pack voltage for accurate power calculation
+	data.power_mw = data.pack_voltage * data.current_ma;
 #if defined(ShowPrintFOutput)
-	printf("Power: %.2f mW\r\n", data.power_mw);
+	printf("Power: %.2f mW (pack voltage based)\r\n", data.power_mw);
 #endif
 
-	//Calculate average power (average power in mW)
-	data.avg_power_mw = data.avg_vcell_voltage * data.avg_current_ma;
+	//Calculate average power (average power in mW) - using pack voltage for accurate power calculation
+	data.avg_power_mw = data.avg_pack_voltage * data.avg_current_ma;
 #if defined(ShowPrintFOutput)
-	printf("Avg Power: %.2f mW\r\n", data.avg_power_mw);
+	printf("Avg Power: %.2f mW (pack voltage based)\r\n", data.avg_power_mw);
 #endif
 
 
@@ -751,5 +758,76 @@ void max17261_read_filtercfg_debug(void)
 	       temp_field, avgta_time_s, avgta_time_s / 60.0);
 	printf("============================\r\n");
 #endif
+}
+
+uint16_t max17261_read_device_id(void)
+{
+	uint16_t device_id = 0;
+	
+	// Read DevName register (0x21)
+	if (max17261_read_reg(MAX17261_I2C_ADDR, DevName_addr, &max17261_regs[0x00], 2) == E_NO_ERROR) {
+		device_id = (max17261_regs[1] << 8) + max17261_regs[0];
+#if defined(ShowPrintFOutput)
+		printf("MAX17261 Device ID: 0x%04X\r\n", device_id);
+#endif
+	} else {
+#if defined(ShowPrintFOutput)
+		printf("ERROR: Cannot read MAX17261 Device ID\r\n");
+#endif
+	}
+	
+	return device_id;
+}
+
+void max17261_read_current_calibration(void)
+{
+	uint16_t cgain_reg = 0;
+	uint16_t coff_reg = 0;
+	
+	// Read CGain register (0x2E)
+	if (max17261_read_reg(MAX17261_I2C_ADDR, CGain_addr, &max17261_regs[0x00], 2) == E_NO_ERROR) {
+		cgain_reg = (max17261_regs[1] << 8) + max17261_regs[0];
+	}
+	
+	// Read COff register (0x2F)
+	if (max17261_read_reg(MAX17261_I2C_ADDR, COff_addr, &max17261_regs[0x00], 2) == E_NO_ERROR) {
+		coff_reg = (max17261_regs[1] << 8) + max17261_regs[0];
+	}
+	
+	// Calculate actual gain factor
+	double gain_factor = (double)cgain_reg / 0x0400;
+	
+#if defined(ShowPrintFOutput)
+	printf("=== Current Calibration Debug ===\r\n");
+	printf("CGain Register: 0x%04X (gain factor: %.4f)\r\n", cgain_reg, gain_factor);
+	printf("COff Register: 0x%04X (offset: %d µV)\r\n", coff_reg, (int16_t)coff_reg);
+	printf("Default CGain: 0x0400 (no adjustment)\r\n");
+	printf("Current formula: ADC_Reading × %.4f + %d µV\r\n", gain_factor, (int16_t)coff_reg);
+	printf("================================\r\n");
+#endif
+}
+
+int max17261_set_current_gain(uint16_t gain_value)
+{
+	max17261_regs[0] = gain_value & 0x00FF;
+	max17261_regs[1] = gain_value >> 8;
+	
+#if defined(ShowPrintFOutput)
+	printf("Setting CGain to 0x%04X (gain factor: %.4f)\r\n", gain_value, (double)gain_value / 0x0400);
+#endif
+	
+	int result = max17261_write_reg(MAX17261_I2C_ADDR, CGain_addr, &max17261_regs[0x00], 2);
+	
+	if (result == E_NO_ERROR) {
+#if defined(ShowPrintFOutput)
+		printf("CGain register updated successfully\r\n");
+#endif
+		return E_SUCCESS;
+	} else {
+#if defined(ShowPrintFOutput)
+		printf("CGain register update failed\r\n");
+#endif
+		return E_FAIL;
+	}
 }
 

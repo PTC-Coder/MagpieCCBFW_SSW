@@ -94,6 +94,14 @@ int main(void)
     MXC_Delay(2000);
     max17261_soft_reset(); // perform soft reset
     MXC_Delay(250);
+    // Read device ID to verify communication
+    uint16_t device_id = max17261_read_device_id();
+    if (device_id != 0) {
+        printf("MAX17261 communication verified, Device ID: 0x%04X\r\n", device_id);
+    } else {
+        printf("WARNING: MAX17261 Device ID read failed\r\n");
+    }
+    
     if (max17261_por_detected())
     {   // load max17261 configuration
         if (!max17261_wait_dnr(0)) {
@@ -160,13 +168,14 @@ int main(void)
           static uint8_t debug_counter = 0;
           if (++debug_counter >= 10) {
               max17261_read_capacity_debug();
+              max17261_read_current_calibration(); // Check current calibration
               debug_counter = 0;
           }
           
           // Force reconfiguration if DesignCap is wrong
           uint16_t current_designcap = max17261_read_designcap();
           
-          if (current_designcap != 0x1950) {
+          if (current_designcap != 0x000D) {
               printf("DesignCap incorrect (0x%04X), forcing reconfiguration...\n", current_designcap);
               max17261_soft_reset();
               MXC_Delay(500000); // 500ms delay
@@ -186,11 +195,11 @@ int main(void)
           // Read and display fuel gauge data
           fuel_gauge_data_t before_data = Fuel_gauge_data_collect("Before");
 
-          printf("Current mA: %.2f mA, Voltage: %.3f V, Power: %.2f mW\n", 
-                 before_data.current_ma, before_data.vcell_voltage, before_data.power_mw);
+          printf("Current mA: %.2f mA, Cell: %.3f V, Pack: %.3f V, Power: %.2f mW\n", 
+                 before_data.current_ma, before_data.vcell_voltage, before_data.pack_voltage, before_data.power_mw);
 
-          printf("Avg. Current mA: %.2f mA, Avg. Volatge: %.3f V, Avg. Power: %.2f mW\n", 
-                 before_data.avg_current_ma, before_data.avg_vcell_voltage, before_data.avg_power_mw);
+          printf("Avg. Current mA: %.2f mA, Avg. Cell: %.3f V, Avg. Pack: %.3f V, Avg. Power: %.2f mW\n", 
+                 before_data.avg_current_ma, before_data.avg_vcell_voltage, before_data.avg_pack_voltage, before_data.avg_power_mw);
             
           
 #if defined(console)
@@ -215,14 +224,14 @@ int main(void)
           
 #if defined(console)
 
-            printf("Current mA: %.2f mA, Voltage: %.3f V, Power: %.2f mW\n", 
-                 after_data.current_ma, after_data.vcell_voltage, after_data.power_mw);
+            printf("Current mA: %.2f mA, Cell: %.3f V, Pack: %.3f V, Power: %.2f mW\n", 
+                 after_data.current_ma, after_data.vcell_voltage, after_data.pack_voltage, after_data.power_mw);
 
-            printf("Avg. Current mA: %.2f mA, Avg. Volatge: %.3f V, Avg. Power: %.2f mW\n", 
-                    after_data.avg_current_ma, after_data.avg_vcell_voltage, after_data.avg_power_mw);
+            printf("Avg. Current mA: %.2f mA, Avg. Cell: %.3f V, Avg. Pack: %.3f V, Avg. Power: %.2f mW\n", 
+                    after_data.avg_current_ma, after_data.avg_vcell_voltage, after_data.avg_pack_voltage, after_data.avg_power_mw);
 
-            printf("Analysis: Voltage change = %.3f V, Current change = %.2f mA\r\n", 
-                    voltage_change, current_change);
+            printf("Analysis: Cell voltage change = %.3f V, Pack voltage change = %.3f V, Current change = %.2f mA\r\n", 
+                    voltage_change, voltage_change * 2.0, current_change);
 #endif
             
             // Brief LED indication only

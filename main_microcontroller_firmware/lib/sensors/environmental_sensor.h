@@ -16,7 +16,7 @@
 #include <stdbool.h>
 
 /* BME688 I2C Address - 0x77 when SDO connected to VDDIO, 0x76 when SDO to GND */
-#define BME688_I2C_ADDR 0x77u
+#define BME688_I2C_ADDR 0x77u  // Your sensor is at 0x77 (SDO connected to VDDIO)
 
 /* BME688 Data Structure */
 typedef struct {
