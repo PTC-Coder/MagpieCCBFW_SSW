@@ -89,11 +89,24 @@ void RTC_IRQHandler(void);
 static void print_time_with_milliseconds(void);
 static uint32_t get_internal_RTC_time(void *buff, void *strbuff);
 
+// Folder management functions
+static int setup_session_folder(void);
+static int setup_day_folder(int year, int month, int day, uint32_t sample_rate, uint32_t bit_depth, uint32_t num_channels);
+
 
 //#define FIRST_SET_RTC 1    //uncomment this to set the clock time in the setup_realtimeclock()
 
-#define DEFAULT_FILENAME "Magpie00_19000101_000000"
-char savedFileName[31] = DEFAULT_FILENAME;
+#define DEFAULT_FILENAME "Default_19000101_000000"
+char savedFileName[64] = DEFAULT_FILENAME;  // Increased size for longer paths
+
+// Session folder management
+static bool isFirstRecordingAfterBoot = true;
+static char currentSessionFolder[32] = "";   // e.g., "MAG000001_000"
+static char currentDayFolder[96] = "";       // e.g., "MAG000001_000/20251125_48kHz_16bit_CH01"
+static int currentDayOfYear = -1;            // Track current day to detect day changes
+static uint32_t currentSampleRateKHz = 0;    // Track current sample rate to detect changes
+static uint32_t currentBitDepth = 0;         // Track current bit depth to detect changes
+static uint32_t currentNumChannels = 0;      // Track current number of channels to detect changes
 
 //==============DS3231 Related=========================
 #define OUTPUT_MSG_BUFFER_SIZE       128U
@@ -147,11 +160,6 @@ int main(void)
 #else
     bsp_console_uart_deinit();
 #endif
-
-
-    LED_cascade_right();
-    LED_cascade_right();
-
 
     MXC_ICC_Enable();
 
@@ -257,8 +265,11 @@ int main(void)
    
                 get_internal_RTC_time(&internal_RTC_datetime, internal_RTC_datetime_str);
                 
-                // Format: YYYYMMDD_HHMMSS.fffZ
-                sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03dZ",
+                // Format: PROJECTID_SITEID_RECORDERID_YYYYMMDD_HHMMSS.fffZ (file will be saved in day folder)
+                sprintf(savedFileName,"%s_%s_%s_%04d%02d%02d_%02d%02d%02d.%03dZ",
+                    SYS_CONFIG_PROJECT_ID,
+                    SYS_CONFIG_SITE_ID,
+                    SYS_CONFIG_RECORDER_ID,
                     ds3231_datetime.tm_year + 1900,
                     ds3231_datetime.tm_mon + 1,
                     ds3231_datetime.tm_mday,
@@ -303,33 +314,35 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
     uint32_t bytes_written;
 
     // a string buffer to write file names into
-    char file_name_buff[64];
+    char file_name_buff[128];
 
     //Get Time from RTC with milliseconds again to get the most accurate time stamp
 
  
-    if (!E_NO_ERROR == get_internal_RTC_time(&internal_RTC_datetime, internal_RTC_datetime_str))
+    if (get_internal_RTC_time(&internal_RTC_datetime, internal_RTC_datetime_str) != E_NO_ERROR)
     {
-    // Format: YYYYMMDD_HHMMSS.fffZ
-    sprintf(savedFileName,"Magpie00_%04d%02d%02d_%02d%02d%02d.%03dZ",
+        // Error getting time - use default filename
+        printf("[WARNING]--> Could not get internal RTC time\n");
+    }
+    
+    // Format: ProjectID_3digitK_SiteID_RecorderID-bitb-CHnn_YYYYMMDD_HHMMSS.fffZ.wav
+    // Example: S6741NY01_048K_S01_MAG000001-16b-CH01_20251126_150541.041Z.wav
+    snprintf(file_name_buff, sizeof(file_name_buff), 
+        "%s_%03luK_%s_%s-%lub-CH%02u_%04d%02d%02d_%02d%02d%02d.%03dZ.wav",
+        SYS_CONFIG_PROJECT_ID,
+        (unsigned long)(wav_attr->sample_rate / 1000),
+        SYS_CONFIG_SITE_ID,
+        SYS_CONFIG_RECORDER_ID,
+        (unsigned long)wav_attr->bits_per_sample,
+        (unsigned int)wav_attr->num_channels,
         ds3231_datetime.tm_year + 1900,
         ds3231_datetime.tm_mon + 1,
         ds3231_datetime.tm_mday,
         internal_RTC_datetime.tm_hour,
         internal_RTC_datetime.tm_min,
         internal_RTC_datetime.tm_sec,
-        internal_RTC_datetime.tm_subsec);        
-    }
-
-    // derive the file name from the input parameters
-    sprintf(
-        file_name_buff,
-        "%s_%dkHz_%d_bit_%d_channel.wav",
-        savedFileName,        
-        wav_attr->sample_rate / 1000,
-        wav_attr->bits_per_sample,
-        wav_attr->num_channels);
-
+        internal_RTC_datetime.tm_subsec);
+    
     if (sd_card_fopen(file_name_buff, POSIX_FILE_MODE_WRITE) != E_NO_ERROR)
     {
         printf("[ERROR]--> SD card fopen\n");
@@ -340,21 +353,27 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
         printf("[SUCCESS]--> SD card fopen\n");
     }
 
-    // seek past the wave header, we'll fill it in later after recording the audio, we'll know the file length then
-    if (sd_card_lseek(wav_header_get_header_length()) != E_NO_ERROR)
+    // Write zeros to the header area to ensure no garbage data
+    // This prevents undefined file content when using lseek
     {
-        printf("[ERROR]--> SD card lseek past wav header\n");
-        error_handler(STATUS_LED_COLOR_RED);
+        static uint8_t zero_buffer[512];
+        memset(zero_buffer, 0, sizeof(zero_buffer));
+        uint32_t header_len = wav_header_get_header_length();
+        uint32_t bytes_written;
+        for (uint32_t i = 0; i < header_len; i += sizeof(zero_buffer)) {
+            uint32_t chunk_size = (header_len - i < sizeof(zero_buffer)) ? (header_len - i) : sizeof(zero_buffer);
+            sd_card_fwrite(zero_buffer, chunk_size, &bytes_written);
+        }
+        printf("[SUCCESS]--> Initialized header area with zeros (%lu bytes)\n", (unsigned long)header_len);
     }
-    else
-    {
-        printf("[SUCCESS]--> SD card lseek past wav header\n");
-    }
+    // File pointer is now at the correct position after the header
 
     // there will be some integer truncation here, good enough for this early demo, but improve file-len code eventually
     const uint32_t file_len_in_microsecs = file_len_secs * 1000000;
     const uint32_t num_dma_blocks_in_the_file = file_len_in_microsecs / AUDIO_DMA_CHUNK_READY_PERIOD_IN_MICROSECS;
 
+    // Reset decimation filter state to prevent garbage data at the beginning of recording
+    decimation_filter_reset();
     decimation_filter_set_sample_rate(wav_attr->sample_rate);
 
 // expanding to q31 means 4 bytes per sample, 2 channels
@@ -372,6 +391,9 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
      don't need to do any decimation filtering for 384k.
      */
     static uint8_t workspace_byte_pool[FULL_BYTE_POOL_SIZE];
+    
+    // Clear workspace buffer to ensure no garbage data at the beginning
+    memset(workspace_byte_pool, 0, sizeof(workspace_byte_pool));
 
     // 384kHz is treated differently to all the other sample rates, since it does not go through the decimation filter
     const bool its_the_special_case_of_384kHz = (wav_attr->sample_rate == AUDIO_SAMPLE_RATE_384kHz);
@@ -409,8 +431,6 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
     audio_dma_start();
 
     //status_led_set(STATUS_LED_COLOR_GREEN, true); // green led on while recording
-
-
 
     uint32_t num_dma_blocks_consumed = 0;
 
@@ -804,9 +824,9 @@ static void LED_cascade_right(void) //R->G->B
     {
         //Turn each color LED on
         status_led_set(i,TRUE);
-        MXC_Delay(MXC_DELAY_MSEC(20));
+        MXC_Delay(MXC_DELAY_MSEC(100));
     }
-    MXC_Delay(MXC_DELAY_MSEC(20));
+    MXC_Delay(MXC_DELAY_MSEC(100));
     status_led_all_off();
 }
 
@@ -817,21 +837,25 @@ static void LED_cascade_left(void) //R<-G<-B
     {
         //Turn each color LED on
         status_led_set(i-1,TRUE);
-        MXC_Delay(MXC_DELAY_MSEC(20));
+        MXC_Delay(MXC_DELAY_MSEC(100));
     }
-    MXC_Delay(MXC_DELAY_MSEC(20));
+    MXC_Delay(MXC_DELAY_MSEC(100));
     status_led_all_off();
 }
 
 static void initialize_system(void)
 {
-     printf("\n*********** Initializing Magpie Core Systems ***********\n\n");
+    printf("\n*********** Initializing Magpie Core Systems ***********\n\n");
     status_led_all_off();    
     
     //initialize push button
+    printf("Enabling push buttons ...\n");
     pushbuttons_init();
+    printf("Enabling LDOs ...\n");
+    bsp_power_on_LDOs();
 
-     bsp_power_on_LDOs();
+    LED_cascade_right();
+    LED_cascade_left();
 
     if (ad4630_init() != E_NO_ERROR)
     {
@@ -1171,13 +1195,33 @@ static void start_recording(uint8_t number_of_channel,
         printf("[INFO]--> SD card Total Space: %llu Bytes\n", disk_size);
         printf("[INFO]--> SD card Free Space: %llu Bytes\n", disk_free);
         
-    }       
+    }
+
+    // Setup session folder on first recording after boot
+    if (isFirstRecordingAfterBoot) {
+        if (setup_session_folder() != E_NO_ERROR) {
+            printf("[ERROR]--> Failed to setup session folder\n");
+            error_handler(STATUS_LED_COLOR_RED);
+        }
+        isFirstRecordingAfterBoot = false;
+    }
 
     Wave_Header_Attributes_t wav_attr = {
         .num_channels =  number_of_channel,
         .sample_rate = rate,
         .bits_per_sample = bit,
     };
+
+    // Setup day folder based on current date, sample rate, bit depth, and channels
+    if (setup_day_folder(ds3231_datetime.tm_year + 1900, 
+                         ds3231_datetime.tm_mon + 1, 
+                         ds3231_datetime.tm_mday,
+                         wav_attr.sample_rate,
+                         wav_attr.bits_per_sample,
+                         wav_attr.num_channels) != E_NO_ERROR) {
+        printf("[ERROR]--> Failed to setup day folder\n");
+        error_handler(STATUS_LED_COLOR_RED);
+    }
                          
     write_wav_file(&wav_attr, duration_s);
     //MXC_Delay(500000);  //Delay 500 ms 
@@ -1267,14 +1311,14 @@ static void sync_RTC_to_DS3231(void)
         MXC_Delay(MXC_DELAY_MSEC(100));
         timeout_count++;
         
-        // Check if pin state changed (for debugging)
+        // // Check if pin state changed (for debugging)
         uint32_t current_pin_state = MXC_GPIO_InGet(MXC_GPIO0, MXC_GPIO_PIN_13);
-        if (current_pin_state != last_pin_state) {
-            printf("P0.13 state changed: %s -> %s\n", 
-                   last_pin_state ? "HIGH" : "LOW",
-                   current_pin_state ? "HIGH" : "LOW");
-            last_pin_state = current_pin_state;
-        }
+        // if (current_pin_state != last_pin_state) {
+        //     printf("P0.13 state changed: %s -> %s\n", 
+        //            last_pin_state ? "HIGH" : "LOW",
+        //            current_pin_state ? "HIGH" : "LOW");
+        //     last_pin_state = current_pin_state;
+        // }
         
         // Check DS3231 status register every 2 seconds to see if alarm flag is set
         if (timeout_count % 20 == 0 && timeout_count > 0) {
@@ -1286,8 +1330,9 @@ static void sync_RTC_to_DS3231(void)
         // Print progress every second
         if (timeout_count % 10 == 0) {
             printf("Waiting... (%d seconds) [P0.13=%s]\n", 
-                   timeout_count / 10, 
-                   current_pin_state ? "HIGH" : "LOW");
+                   timeout_count / 10, current_pin_state ? "HIGH" : "LOW");
+            status_led_toggle(STATUS_LED_COLOR_BLUE);
+            status_led_toggle(STATUS_LED_COLOR_GREEN);                
         }
     }
     
@@ -1488,6 +1533,97 @@ static void print_time_with_milliseconds(void)
         strftime((char*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "DS3231 RTC DateTime: %F %TZ\n\n", &ds3231_datetime);
         printf(output_msgBuffer);
     }
+}
+
+///////////////////////////FOLDER MANAGEMENT FUNCTIONS ////////////////////////////////////
+
+static int setup_session_folder(void)
+{
+    int highest_num = -1;
+    
+    // Find the highest existing session folder number
+    if (sd_card_find_highest_session_folder(SYS_CONFIG_RECORDER_ID, &highest_num) != E_NO_ERROR) {
+        printf("[WARNING]--> Could not scan for existing session folders\n");
+        highest_num = -1;
+    }
+    
+    // Create new session folder with next number
+    int new_num = highest_num + 1;
+    if (new_num > 999) {
+        printf("[ERROR]--> Session folder number exceeded 999\n");
+        return E_OVERFLOW;
+    }
+    
+    sprintf(currentSessionFolder, "%s_%03d", SYS_CONFIG_RECORDER_ID, new_num);
+    
+    // Create the session folder
+    if (sd_card_mkdir(currentSessionFolder) != E_NO_ERROR) {
+        // Check if it already exists (shouldn't happen but handle gracefully)
+        if (!sd_card_dir_exists(currentSessionFolder)) {
+            printf("[ERROR]--> Failed to create session folder: %s\n", currentSessionFolder);
+            return E_COMM_ERR;
+        }
+    }
+    
+    printf("[SUCCESS]--> Created session folder: %s\n", currentSessionFolder);
+    
+    // Reset day tracking for new session
+    currentDayOfYear = -1;
+    currentDayFolder[0] = '\0';
+    
+    return E_NO_ERROR;
+}
+
+static int setup_day_folder(int year, int month, int day, uint32_t sample_rate, uint32_t bit_depth, uint32_t num_channels)
+{
+    // Calculate unique identifiers
+    uint32_t sampleRateKHz = sample_rate / 1000;
+    int dayId = year * 10000 + month * 100 + day;
+    
+    // Format: SessionFolder/YYYYMMDD_XXXkHz_XXbit_CHXX - use static to avoid stack issues
+    static char newDayFolder[96];
+    
+    // Build full path: SessionFolder/20251126_384kHz_24bit_CH02
+    snprintf(newDayFolder, sizeof(newDayFolder), "%s/%d%02d%02d_%lukHz_%lubit_CH%02lu", 
+             currentSessionFolder, year, month, day, 
+             (unsigned long)sampleRateKHz,
+             (unsigned long)bit_depth,
+             (unsigned long)num_channels);
+    
+    // Check if we need to create a new folder (any parameter changed)
+    if (dayId != currentDayOfYear || 
+        sampleRateKHz != currentSampleRateKHz ||
+        bit_depth != currentBitDepth ||
+        num_channels != currentNumChannels) {
+        
+        // Check if folder already exists
+        if (!sd_card_dir_exists(newDayFolder)) {
+            // Create the day folder
+            if (sd_card_mkdir(newDayFolder) != E_NO_ERROR) {
+                printf("[ERROR]--> Failed to create day folder: %s\n", newDayFolder);
+                return E_COMM_ERR;
+            }
+            printf("[SUCCESS]--> Created day folder: %s\n", newDayFolder);
+        } else {
+            printf("[INFO]--> Using existing day folder: %s\n", newDayFolder);
+        }
+        
+        // Update tracking variables
+        currentDayOfYear = dayId;
+        currentSampleRateKHz = sampleRateKHz;
+        currentBitDepth = bit_depth;
+        currentNumChannels = num_channels;
+        strcpy(currentDayFolder, newDayFolder);
+    }
+    
+    // Always change to the day folder (FatFS resets cwd on mount)
+    if (sd_card_cd(currentDayFolder) != E_NO_ERROR) {
+        printf("[ERROR]--> Failed to change to day folder: %s\n", currentDayFolder);
+        return E_COMM_ERR;
+    }
+    printf("[INFO]--> Working in day folder: %s\n", currentDayFolder);
+    
+    return E_NO_ERROR;
 }
 
 ///////////////////////////ISP CALL BACKS ////////////////////////////////////

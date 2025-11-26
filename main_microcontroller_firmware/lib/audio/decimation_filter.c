@@ -1,6 +1,7 @@
 
 /* Private includes --------------------------------------------------------------------------------------------------*/
 
+#include <stdbool.h>
 #include "audio_dma.h"
 #include "data_converters.h"
 #include "decimation_filter.h"
@@ -9,6 +10,10 @@
 
 // the current sample rate to use when decimating
 static Audio_Sample_Rate_t current_sample_rate = AUDIO_SAMPLE_RATE_192kHz;
+
+// Reset flags for each channel - when true, the filter state will be reset on next call
+static bool reset_pending_ch0 = true;
+static bool reset_pending_ch1 = true;
 
 /* Private function declarations -------------------------------------------------------------------------------------*/
 
@@ -53,6 +58,14 @@ static void decimate_2x_iirHB_ch1( // takes 1.7ms, new design (7/28/24) with 50d
     uint32_t len);
 
 /* Public function definitions ---------------------------------------------------------------------------------------*/
+
+void decimation_filter_reset(void)
+{
+    // Set reset flags - the actual state reset happens inside each filter function
+    // on the next call, which ensures the static local variables get reset
+    reset_pending_ch0 = true;
+    reset_pending_ch1 = true;
+}
 
 void decimation_filter_set_sample_rate(Audio_Sample_Rate_t sample_rate)
 {
@@ -184,6 +197,21 @@ void decimate_16x_iirHB_ch0( // takes 1.7ms, new design (7/28/24) with 50dB
     static q31_t in8, in9, in10, in11, in12, in13, in14, in15;
 
     static q31_t deci_out;
+
+    // Reset filter state if requested
+    if (reset_pending_ch0) {
+        state_stg0_zm1 = 0; state_stg0_zm0 = 0;
+        state_stg1_zm1 = 0; state_stg1_zm0 = 0;
+        state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        state_stg3_A_zm2 = 0; state_stg3_A_zm1 = 0; state_stg3_A_zm0 = 0;
+        state_stg3_B_zm1 = 0; state_stg3_B_zm0 = 0;
+        deci_stg0_out0 = 0; deci_stg0_out1 = 0; deci_stg0_out2 = 0; deci_stg0_out3 = 0;
+        deci_stg0_out4 = 0; deci_stg0_out5 = 0; deci_stg0_out6 = 0; deci_stg0_out7 = 0;
+        deci_stg1_out0 = 0; deci_stg1_out1 = 0; deci_stg1_out2 = 0; deci_stg1_out3 = 0;
+        deci_stg2_out0 = 0; deci_stg2_out1 = 0;
+        reset_pending_ch0 = false;
+    }
 
     k = len;
 
@@ -372,6 +400,21 @@ void decimate_16x_iirHB_ch1( // takes 1.7ms, new design (7/28/24) with 50dB
 
     static q31_t deci_out;
 
+    // Reset filter state if requested
+    if (reset_pending_ch1) {
+        state_stg0_zm1 = 0; state_stg0_zm0 = 0;
+        state_stg1_zm1 = 0; state_stg1_zm0 = 0;
+        state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        state_stg3_A_zm2 = 0; state_stg3_A_zm1 = 0; state_stg3_A_zm0 = 0;
+        state_stg3_B_zm1 = 0; state_stg3_B_zm0 = 0;
+        deci_stg0_out0 = 0; deci_stg0_out1 = 0; deci_stg0_out2 = 0; deci_stg0_out3 = 0;
+        deci_stg0_out4 = 0; deci_stg0_out5 = 0; deci_stg0_out6 = 0; deci_stg0_out7 = 0;
+        deci_stg1_out0 = 0; deci_stg1_out1 = 0; deci_stg1_out2 = 0; deci_stg1_out3 = 0;
+        deci_stg2_out0 = 0; deci_stg2_out1 = 0;
+        reset_pending_ch1 = false;
+    }
+
     k = len;
 
     while (k > 0)
@@ -544,6 +587,18 @@ void decimate_8x_iirHB_ch0( // takes 1.7ms, new design (7/28/24) with 50dB
     static q31_t in0, in1, in2, in3, in4, in5, in6, in7;
     static q31_t deci_out;
 
+    // Reset filter state if requested
+    if (reset_pending_ch0) {
+        state_stg0_zm1 = 0; state_stg0_zm0 = 0;
+        state_stg1_A_zm1 = 0; state_stg1_A_zm0 = 0;
+        state_stg1_B_zm1 = 0; state_stg1_B_zm0 = 0;
+        state_stg2_A_zm2 = 0; state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        deci_stg0_out0 = 0; deci_stg0_out1 = 0; deci_stg0_out2 = 0; deci_stg0_out3 = 0;
+        deci_stg1_out0 = 0; deci_stg1_out1 = 0;
+        reset_pending_ch0 = false;
+    }
+
     k = len;
 
     while (k > 0)
@@ -679,6 +734,18 @@ void decimate_8x_iirHB_ch1( // takes 1.7ms, new design (7/28/24) with 50dB
     static q31_t in0, in1, in2, in3, in4, in5, in6, in7;
     static q31_t deci_out;
 
+    // Reset filter state if requested
+    if (reset_pending_ch1) {
+        state_stg0_zm1 = 0; state_stg0_zm0 = 0;
+        state_stg1_A_zm1 = 0; state_stg1_A_zm0 = 0;
+        state_stg1_B_zm1 = 0; state_stg1_B_zm0 = 0;
+        state_stg2_A_zm2 = 0; state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        deci_stg0_out0 = 0; deci_stg0_out1 = 0; deci_stg0_out2 = 0; deci_stg0_out3 = 0;
+        deci_stg1_out0 = 0; deci_stg1_out1 = 0;
+        reset_pending_ch1 = false;
+    }
+
     k = len;
 
     while (k > 0)
@@ -807,6 +874,16 @@ void decimate_4x_iirHB_ch0( // takes 1.6ms, new design (7/28/24) with 50dB
     static q31_t in0, in1, in2, in3;
     static q31_t deci_out;
 
+    // Reset filter state if requested
+    if (reset_pending_ch0) {
+        state_stg1_A_zm1 = 0; state_stg1_A_zm0 = 0;
+        state_stg1_B_zm1 = 0; state_stg1_B_zm0 = 0;
+        state_stg2_A_zm2 = 0; state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        deci_stg1_out0 = 0; deci_stg1_out1 = 0;
+        reset_pending_ch0 = false;
+    }
+
     k = len;
 
     while (k > 0)
@@ -906,6 +983,16 @@ void decimate_4x_iirHB_ch1( // takes 1.6ms, new design (7/28/24) with 50dB
     static q31_t in0, in1, in2, in3;
     static q31_t deci_out;
 
+    // Reset filter state if requested
+    if (reset_pending_ch1) {
+        state_stg1_A_zm1 = 0; state_stg1_A_zm0 = 0;
+        state_stg1_B_zm1 = 0; state_stg1_B_zm0 = 0;
+        state_stg2_A_zm2 = 0; state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        deci_stg1_out0 = 0; deci_stg1_out1 = 0;
+        reset_pending_ch1 = false;
+    }
+
     k = len;
 
     while (k > 0)
@@ -998,6 +1085,13 @@ void decimate_2x_iirHB_ch0( // takes 3.2ms, new design (7/28/24) with 50dB
     static q31_t in0, in1;
     static q31_t deci_out;
 
+    // Reset filter state if requested
+    if (reset_pending_ch0) {
+        state_stg2_A_zm2 = 0; state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        reset_pending_ch0 = false;
+    }
+
     k = len;
 
     while (k > 0)
@@ -1056,6 +1150,13 @@ void decimate_2x_iirHB_ch1( // takes 3.2ms, new design (7/28/24) with 50dB
 
     static q31_t in0, in1;
     static q31_t deci_out;
+
+    // Reset filter state if requested
+    if (reset_pending_ch1) {
+        state_stg2_A_zm2 = 0; state_stg2_A_zm1 = 0; state_stg2_A_zm0 = 0;
+        state_stg2_B_zm1 = 0; state_stg2_B_zm0 = 0;
+        reset_pending_ch1 = false;
+    }
 
     k = len;
 

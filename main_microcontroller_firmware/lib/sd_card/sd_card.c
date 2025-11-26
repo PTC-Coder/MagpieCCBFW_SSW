@@ -2,6 +2,7 @@
 /* Private includes --------------------------------------------------------------------------------------------------*/
 
 #include <stddef.h> // for NULL
+#include <string.h> // for strlen, strncmp
 
 #include "mxc_delay.h"
 #include "mxc_device.h"
@@ -155,4 +156,60 @@ FRESULT set_file_timestamp (
     fno.ftime = (WORD)(hour * 2048U | min * 32U | sec / 2U);
 
     return f_utime(obj, &fno);
+}
+
+bool sd_card_dir_exists(const char *path)
+{
+    FILINFO fno;
+    FRESULT res = f_stat(path, &fno);
+    return (res == FR_OK) && (fno.fattrib & AM_DIR);
+}
+
+int sd_card_find_highest_session_folder(const char *prefix, int *out_number)
+{
+    DIR dir;
+    FILINFO fno;
+    FRESULT res;
+    int highest = -1;
+    size_t prefix_len = strlen(prefix);
+
+    *out_number = -1;
+
+    res = f_opendir(&dir, "/");
+    if (res != FR_OK) {
+        return E_COMM_ERR;
+    }
+
+    while (1) {
+        res = f_readdir(&dir, &fno);
+        if (res != FR_OK || fno.fname[0] == 0) {
+            break;  // End of directory or error
+        }
+
+        // Check if it's a directory and matches prefix_XXX pattern
+        if ((fno.fattrib & AM_DIR) && 
+            strncmp(fno.fname, prefix, prefix_len) == 0 &&
+            fno.fname[prefix_len] == '_') {
+            
+            // Try to parse the number after prefix_
+            int num = 0;
+            const char *num_str = &fno.fname[prefix_len + 1];
+            
+            // Check if remaining chars are digits (3 digits expected)
+            if (strlen(num_str) == 3 &&
+                num_str[0] >= '0' && num_str[0] <= '9' &&
+                num_str[1] >= '0' && num_str[1] <= '9' &&
+                num_str[2] >= '0' && num_str[2] <= '9') {
+                
+                num = (num_str[0] - '0') * 100 + (num_str[1] - '0') * 10 + (num_str[2] - '0');
+                if (num > highest) {
+                    highest = num;
+                }
+            }
+        }
+    }
+
+    f_closedir(&dir);
+    *out_number = highest;
+    return E_NO_ERROR;
 }

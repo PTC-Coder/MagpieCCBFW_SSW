@@ -43,12 +43,18 @@ typedef struct __attribute__((packed))
  * @brief A structure for holding wav file header information is represented here.
  *
  * This can be cast to a char* and written directly to disk.
+ * 
+ * IMPORTANT: The "data" chunk MUST be the last thing before actual audio samples.
+ * Metadata is placed in a custom "META" chunk BEFORE the data chunk.
  */
 typedef struct __attribute__((packed))
 {
+    // RIFF header
     char riff[4];              /* always the string "RIFF" */
     uint32_t file_len_minus_8; /* file length in bytes - 8 bytes */
     char wave[4];              /* always the string "WAVE" */
+    
+    // fmt chunk
     char fmt_[4];              /* always the string "fmt " (note the trailing space) */
     uint32_t fmt_chunk_size;   /* size of FMT chunk in bytes, usually 16 or 18 */
     uint16_t fmt_tag;          /* 1=PCM, 257=Mu-Law, 258=A-Law, 259=ADPCM  */
@@ -57,16 +63,20 @@ typedef struct __attribute__((packed))
     uint32_t bytes_per_sec;    /* bytes per second = sample_rate * bytes_per_sample */
     uint16_t bytes_per_block;  /* num channels * bytes per sample */
     uint16_t bits_per_sample;  /* number of bits per sample */
-    char data[4];              /* always the string "data" */
-    uint32_t data_length;      /* data length in bytes (file_length - the length of this struct) */
     
-    // Metadata section - key-value pairs for custom data
+    // Custom META chunk for metadata (placed BEFORE data chunk)
+    char meta[4];              /* custom chunk ID "META" */
+    uint32_t meta_chunk_size;  /* size of metadata chunk */
     uint32_t metadata_version; /* Version of metadata format */
     uint32_t metadata_count;   /* Number of valid metadata pairs */
     Metadata_Pair_t metadata_pairs[MAX_METADATA_PAIRS];
     
-    // Pad to 4-sector boundary (2048 bytes total)
-    char pad_to_sectors[WAVE_HEADER_METADATA_SIZE - sizeof(uint32_t) - sizeof(uint32_t) - (sizeof(Metadata_Pair_t) * MAX_METADATA_PAIRS)];
+    // Padding to align to sector boundary
+    char pad_to_sectors[WAVE_HEADER_METADATA_SIZE - 8 - sizeof(uint32_t) - sizeof(uint32_t) - (sizeof(Metadata_Pair_t) * MAX_METADATA_PAIRS)];
+    
+    // data chunk - MUST be last before audio samples
+    char data[4];              /* always the string "data" */
+    uint32_t data_length;      /* data length in bytes (file_length - the length of this struct) */
 } Wave_Header_t;
 
 /* Private variables -------------------------------------------------------------------------------------------------*/
@@ -80,11 +90,13 @@ static Wave_Header_t wave_header = {
     .fmt_ = {'f', 'm', 't', ' '},
     .fmt_chunk_size = WAVE_HEADER_FMT_CHUNK_SIZE,
     .fmt_tag = WAVE_HEADER_FMT_TAG_PCM,
-    .data = {'d', 'a', 't', 'a'},
+    .meta = {'M', 'E', 'T', 'A'},
+    .meta_chunk_size = WAVE_HEADER_METADATA_SIZE - 8,  // chunk size excludes the chunk ID and size fields
     .metadata_version = 1,
     .metadata_count = 0,
-    .metadata_pairs = {{0}},
-    .pad_to_sectors = {0}
+    .metadata_pairs = {{{0}, {0}, 0}},
+    .pad_to_sectors = {0},
+    .data = {'d', 'a', 't', 'a'},
 };
 
 const uint32_t HEADER_LENGTH = sizeof(wave_header);

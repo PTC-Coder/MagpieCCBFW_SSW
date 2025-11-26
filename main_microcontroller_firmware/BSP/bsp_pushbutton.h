@@ -13,7 +13,7 @@
 #define USRBTN_TIMER_ID MXC_TMR5  // Timer 5
 #define USRBTN_TIMER_IRQn TMR5_IRQn
 
-#define DEBOUNCE_DELAY_MS 2  // 2 ms debounce delay
+#define DEBOUNCE_DELAY_MS 50  // 50 ms debounce delay for mechanical buttons
 
 /* Public enumerations -----------------------------------------------------------------------------------------------*/
 

@@ -63,6 +63,12 @@ static int num_buffer_chunks_with_data_to_be_consumed_ch1 = 0;
 static bool overrun_occured_ch0 = false;
 static bool overrun_occured_ch1 = false;
 
+// buffer consumption tracking - moved to file scope so they can be reset in audio_dma_start()
+static uint32_t blockPtrModulo_ch0 = 0;
+static uint32_t blockPtrModulo_ch1 = 0;
+static uint32_t consume_offset_ch0 = 0;
+static uint32_t consume_offset_ch1 = 0;
+
 // Direct register addresses for the DMA channel registers we need to access, saving them like this allows for faster
 // access as opposed to accessing them via MXC_DMAn->ch[channel_of_interest].register_of_interest.
 // We don't need the source or source-reload registers, since the sources are peripherals (SPI in our case).
@@ -223,10 +229,23 @@ int audio_dma_init()
 
 int audio_dma_start()
 {
-    //Re-initialize the big_dma_buff arrays
+    // Re-initialize the big_dma_buff arrays
     memset(big_dma_buff_ch0, 0, sizeof(big_dma_buff_ch0));
     memset(big_dma_buff_ch1, 0, sizeof(big_dma_buff_ch1));
-
+    
+    // Reset buffer consumption counters
+    num_buffer_chunks_with_data_to_be_consumed_ch0 = 0;
+    num_buffer_chunks_with_data_to_be_consumed_ch1 = 0;
+    
+    // Reset overrun flags
+    overrun_occured_ch0 = false;
+    overrun_occured_ch1 = false;
+    
+    // Reset buffer consumption pointers
+    blockPtrModulo_ch0 = 0;
+    blockPtrModulo_ch1 = 0;
+    consume_offset_ch0 = 0;
+    consume_offset_ch1 = 0;
 
     if (dma_channel_0_idx < 0) // negative result indicates an error
     {
@@ -344,25 +363,20 @@ uint32_t audio_dma_num_buffers_available(Audio_Channel_t channel)
 
 uint8_t *audio_dma_consume_buffer(Audio_Channel_t channel)
 {
-    static uint32_t blockPtrModulo_ch0 = 0;
-    static uint32_t blockPtrModulo_ch1 = 0;
-    static uint32_t offset_ch0 = 0;
-    static uint32_t offset_ch1 = 0;
-
     uint8_t *retval;
 
     if (channel == AUDIO_CHANNEL_0)
     {
-        retval = big_dma_buff_ch0 + offset_ch0;
+        retval = big_dma_buff_ch0 + consume_offset_ch0;
         blockPtrModulo_ch0 = (blockPtrModulo_ch0 + 1) & (DMA_NUM_STALLS_ALLOWED - 1);
-        offset_ch0 = blockPtrModulo_ch0 * AUDIO_DMA_BUFF_LEN_IN_BYTES;
+        consume_offset_ch0 = blockPtrModulo_ch0 * AUDIO_DMA_BUFF_LEN_IN_BYTES;
         num_buffer_chunks_with_data_to_be_consumed_ch0 -= 1;
     }
     else
     {
-        retval = big_dma_buff_ch1 + offset_ch1;
+        retval = big_dma_buff_ch1 + consume_offset_ch1;
         blockPtrModulo_ch1 = (blockPtrModulo_ch1 + 1) & (DMA_NUM_STALLS_ALLOWED - 1);
-        offset_ch1 = blockPtrModulo_ch1 * AUDIO_DMA_BUFF_LEN_IN_BYTES;
+        consume_offset_ch1 = blockPtrModulo_ch1 * AUDIO_DMA_BUFF_LEN_IN_BYTES;
         num_buffer_chunks_with_data_to_be_consumed_ch1 -= 1;
     }
 

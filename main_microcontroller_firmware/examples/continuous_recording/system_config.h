@@ -14,6 +14,11 @@
 
 /* Public defines ----------------------------------------------------------------------------------------------------*/
 
+// Project identification
+#define SYS_CONFIG_PROJECT_ID   "S0000NY00"   // Project identifier (e.g., S6741NY01)
+#define SYS_CONFIG_SITE_ID      "S00"         // Site identifier (e.g., S01)
+#define SYS_CONFIG_RECORDER_ID  "MAG000001"   // Recorder identifier (used for session folders and filenames)
+
 // the length of the WAVE file to write to the SD card, a positive integer, long file durations will tale a long time to write
 // max value 4k seconds, about 70 minutes (we will remove this limitation in the final code, limited for the demo for simplicity).
 #define SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS (3600)  //900
@@ -60,5 +65,6 @@ const Audio_Gain_t SYS_CONFIG_AUDIO1_GAIN = AUDIO_GAIN_40dB;
 
 // choose one SD card slot to use
 const SD_Card_Bank_Card_Slot_t SYS_CONFIG_SD_CARD_SLOT_TO_USE = SD_CARD_BANK_CARD_SLOT_0;
+
 
 #endif /* SYS_CONFIG_H_ */

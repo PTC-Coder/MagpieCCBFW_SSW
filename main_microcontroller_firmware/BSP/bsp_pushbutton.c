@@ -135,7 +135,13 @@ static void usr_btn_debounce_timer_handler()
     else
     {
         user_button_pressed = false;
-    }   
+    }
+    
+    // Re-enable the GPIO interrupt for the pushbutton after debounce is complete
+    // Clear any pending interrupt flags first to avoid immediate re-trigger
+    MXC_GPIO_ClearFlags(bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
+    MXC_GPIO_EnableInt(bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
+    
     printf("Timer handler fired\n");     
 }
 

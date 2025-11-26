@@ -2,6 +2,13 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "convert elf to hex",
+            "type": "shell",
+            "command": "arm-none-eabi-objcopy -O ihex ${workspaceFolder}\\build\\${config:program_file} ${workspaceFolder}\\build\\${config:project_name}.hex",
+            "group": "build",
+            "problemMatcher": []
+         },
+        {
             "label": "build",
             "type": "shell",
             "command": "make -r -j 8 --output-sync=target --no-print-directory TARGET=${config:target} BOARD=${config:board} MAXIM_PATH=${config:MAXIM_PATH} MAKE=make PROJECT=${config:project_name}",

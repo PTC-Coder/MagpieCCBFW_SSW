@@ -202,4 +202,28 @@ FRESULT set_file_timestamp (
     int sec
 );
 
+/**
+ * @brief `sd_card_dir_exists(p)` checks if a directory exists at path `p`.
+ *
+ * @param path the path to check.
+ *
+ * @pre The SD card is mounted.
+ *
+ * @retval true if directory exists, false otherwise.
+ */
+bool sd_card_dir_exists(const char *path);
+
+/**
+ * @brief `sd_card_find_highest_session_folder(prefix, out_number)` finds the highest numbered session folder
+ * matching the pattern prefix_XXX and returns the number.
+ *
+ * @param prefix the folder name prefix to search for (e.g., "Magpie")
+ * @param out_number pointer to store the highest found number (-1 if none found)
+ *
+ * @pre The SD card is mounted.
+ *
+ * @retval `E_NO_ERROR` if successful, else a negative error code.
+ */
+int sd_card_find_highest_session_folder(const char *prefix, int *out_number);
+
 #endif /* SD_CARD_H_ */

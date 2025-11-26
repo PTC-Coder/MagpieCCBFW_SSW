@@ -17,6 +17,15 @@
 /* Public function declarations --------------------------------------------------------------------------------------*/
 
 /**
+ * @brief `decimation_filter_reset()` resets all internal filter state variables to zero.
+ * This should be called before starting a new recording to prevent garbage data from
+ * previous filter state appearing at the beginning of the recording.
+ *
+ * @post All internal filter state variables are reset to zero for both channels.
+ */
+void decimation_filter_reset(void);
+
+/**
  * @brief `decimation_filter_set_sample_rate(sr)` sets the sample rate for the decimation filter to `sr`. This must not be
  * called in the middle of writing a WAV file. Only call this between SD card file writes when you want to change
  * sample rates.
