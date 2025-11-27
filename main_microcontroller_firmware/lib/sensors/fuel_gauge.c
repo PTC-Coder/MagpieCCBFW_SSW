@@ -644,7 +644,7 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 	data.vcell_raw = tempdata;
 	data.vcell_voltage = (double)tempdata * VCELL_LSB;
-	data.pack_voltage = data.vcell_voltage * 2.0; // 2S pack voltage
+	data.pack_voltage = data.vcell_voltage * 2.0 + 0.4; // 2S pack voltage + 0.4V drop due to protection circuit
 #if defined(ShowPrintFOutput)
 	printf("VCell: %.3f V, Pack: %.3f V (raw: 0x%04X = %d)\r\n", data.vcell_voltage, data.pack_voltage, tempdata, tempdata);
 #endif
@@ -654,7 +654,7 @@ fuel_gauge_data_t Fuel_gauge_data_collect(const char *label)
 	tempdata = (max17261_regs[1] << 8) + max17261_regs[0];
 	data.avg_vcell_raw = tempdata;
 	data.avg_vcell_voltage = (double)tempdata * VCELL_LSB;
-	data.avg_pack_voltage = data.avg_vcell_voltage * 2.0; // 2S pack voltage
+	data.avg_pack_voltage = data.avg_vcell_voltage * 2.0 + 0.4; // 2S pack voltage
 #if defined(ShowPrintFOutput)
 	printf("Avg VCell: %.3f V, Avg Pack: %.3f V (raw: 0x%04X = %d)\r\n", data.avg_vcell_voltage, data.avg_pack_voltage, tempdata, tempdata);
 #endif

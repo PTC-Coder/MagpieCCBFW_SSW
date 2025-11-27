@@ -666,22 +666,22 @@ void write_wav_file(Wave_Header_Attributes_t *wav_attr, uint32_t file_len_secs)
 
     fuel_gauge_data_t fg_metadata = Fuel_gauge_data_collect("Recording");
     
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.vcell_voltage * 2);  //2S
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.pack_voltage);  //There's a 0.4V drop due to the protection circuit
     wav_header_add_metadata("Recording Voltage(V)", tempWAVBuffer);
     
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.current_ma);  
     wav_header_add_metadata("Recording Current(mA)", tempWAVBuffer);
 
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.power_mw * 2);  //2S
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.power_mw);  //2S
     wav_header_add_metadata("Recording Power(mW)", tempWAVBuffer);
 
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_vcell_voltage * 2);  //2S
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_pack_voltage);  //2S
     wav_header_add_metadata("R Avg. Voltage(V)", tempWAVBuffer);
     
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_current_ma);  
     wav_header_add_metadata("R Avg. Current(mA)", tempWAVBuffer);
 
-    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_power_mw * 2);  //2S
+    sprintf(tempWAVBuffer, "%.2f", fg_metadata.avg_power_mw);  //2S
     wav_header_add_metadata("R Avg. Power(mW)", tempWAVBuffer);
 
     sprintf(tempWAVBuffer, "%.2f", fg_metadata.temperature_c);  
@@ -1565,6 +1565,15 @@ static int setup_session_folder(void)
         }
     }
     
+    // Set folder timestamp to current RTC time
+    set_file_timestamp(currentSessionFolder, 
+                       ds3231_datetime.tm_year + 1900,
+                       ds3231_datetime.tm_mon + 1,
+                       ds3231_datetime.tm_mday,
+                       ds3231_datetime.tm_hour,
+                       ds3231_datetime.tm_min,
+                       ds3231_datetime.tm_sec);
+    
     printf("[SUCCESS]--> Created session folder: %s\n", currentSessionFolder);
     
     // Reset day tracking for new session
@@ -1603,6 +1612,16 @@ static int setup_day_folder(int year, int month, int day, uint32_t sample_rate, 
                 printf("[ERROR]--> Failed to create day folder: %s\n", newDayFolder);
                 return E_COMM_ERR;
             }
+            
+            // Set folder timestamp to current RTC time
+            set_file_timestamp(newDayFolder, 
+                               ds3231_datetime.tm_year + 1900,
+                               ds3231_datetime.tm_mon + 1,
+                               ds3231_datetime.tm_mday,
+                               ds3231_datetime.tm_hour,
+                               ds3231_datetime.tm_min,
+                               ds3231_datetime.tm_sec);
+            
             printf("[SUCCESS]--> Created day folder: %s\n", newDayFolder);
         } else {
             printf("[INFO]--> Using existing day folder: %s\n", newDayFolder);
