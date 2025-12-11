@@ -130,6 +130,18 @@ int sd_card_fwrite(const void *buff, uint32_t size, uint32_t *written)
     return f_write(&SD_file, buff, size, (UINT *)written) == FR_OK ? E_NO_ERROR : E_COMM_ERR;
 }
 
+int sd_card_fread(void *buff, uint32_t size, uint32_t *bytes_read)
+{
+    return f_read(&SD_file, buff, size, (UINT *)bytes_read) == FR_OK ? E_NO_ERROR : E_COMM_ERR;
+}
+
+bool sd_card_file_exists(const char *file_name)
+{
+    FILINFO fno;
+    FRESULT res = f_stat(file_name, &fno);
+    return (res == FR_OK) && !(fno.fattrib & AM_DIR);
+}
+
 int sd_card_lseek(uint32_t offset)
 {
     return f_lseek(&SD_file, offset) == FR_OK ? E_NO_ERROR : E_COMM_ERR;

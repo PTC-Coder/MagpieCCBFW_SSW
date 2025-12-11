@@ -1,10 +1,19 @@
 /**
  * @file    sys_config.h
  * @brief   This module simply provides some definitions for configuring the demo application.
+ * @details Configuration values can be overridden at runtime by placing a schedule.sch file
+ *          on SD_CARD_BANK_CARD_SLOT_5. If no schedule file is found, these defaults are used.
+ *
+ * @warning This header must ONLY be included by main.c
  */
 
 #ifndef SYS_CONFIG_H_
 #define SYS_CONFIG_H_
+
+/* Enforce single-file inclusion - main.c must define this before including */
+#ifndef SYS_CONFIG_ALLOW_INCLUDE
+#error "system_config.h can only be included by main.c. Define SYS_CONFIG_ALLOW_INCLUDE before including."
+#endif
 
 /* Includes ----------------------------------------------------------------------------------------------------------*/
 
@@ -14,57 +23,42 @@
 
 /* Public defines ----------------------------------------------------------------------------------------------------*/
 
-// Project identification
+// Project identification (not overridable via schedule.sch)
 #define SYS_CONFIG_PROJECT_ID   "S0000NY00"   // Project identifier (e.g., S6741NY01)
 #define SYS_CONFIG_SITE_ID      "S00"         // Site identifier (e.g., S01)
 #define SYS_CONFIG_RECORDER_ID  "MAG000001"   // Recorder identifier (used for session folders and filenames)
 
-// the length of the WAVE file to write to the SD card, a positive integer, long file durations will tale a long time to write
-// max value 4k seconds, about 70 minutes (we will remove this limitation in the final code, limited for the demo for simplicity).
-#define SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS (3600)  //900
+// SD card slot for schedule file
+#define SYS_CONFIG_SCHEDULE_SD_SLOT     SD_CARD_BANK_CARD_SLOT_5
+#define SYS_CONFIG_SCHEDULE_FILENAME    "schedule.sch"
 
-// // comment or uncomment sample rates to add them to the test
-// const Audio_Sample_Rate_t sys_sample_rates_to_test[] = {
-//     AUDIO_SAMPLE_RATE_24kHz,
-//     AUDIO_SAMPLE_RATE_48kHz,
-//     AUDIO_SAMPLE_RATE_96kHz,
-//     AUDIO_SAMPLE_RATE_192kHz,
-//     AUDIO_SAMPLE_RATE_384kHz,
-// };
+/* Runtime-configurable variables (can be overridden by schedule.sch) -------------------------------------------------
+ * Edit these default values as needed. They will be overridden if a valid schedule.sch file is found on SD slot 5.
+ */
 
-// const uint32_t SYS_CONFIG_NUM_SAMPLE_RATES_TO_TEST = sizeof(sys_sample_rates_to_test) / sizeof(sys_sample_rates_to_test[0]);
+// the length of the WAVE file to write to the SD card, a positive integer
+// max value 4k seconds, about 70 minutes
+static uint32_t SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS = 3600;
 
-const uint32_t SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_48kHz;
+// Sample rate setting (24000, 48000, 96000, 192000, 384000)
+static uint32_t SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_48kHz;
 
-// comment or uncomment bit depths to add them to the test
-// const Audio_Bits_Per_Sample_t sys_bit_depths_to_test[] = {
-//     AUDIO_BIT_DEPTH_16_BITS_PER_SAMPLE,
-//     AUDIO_BIT_DEPTH_24_BITS_PER_SAMPLE,
-// };
+// Bit depth setting (16 or 24)
+static uint32_t SYS_CONFIG_NUM_BIT_DEPTH = AUDIO_BIT_DEPTH_16_BITS_PER_SAMPLE;
 
-// const uint32_t SYS_CONFIG_NUM_BIT_DEPTHS_TO_TEST = sizeof(sys_bit_depths_to_test) / sizeof(sys_bit_depths_to_test[0]);
+// Number of channels: WAVE_HEADER_MONO (1) or WAVE_HEADER_STEREO (2)
+static uint32_t SYS_CONFIG_NUM_CHANNEL = WAVE_HEADER_MONO;
 
-const uint32_t SYS_CONFIG_NUM_BIT_DEPTH = AUDIO_BIT_DEPTH_16_BITS_PER_SAMPLE;
+// In mono mode, which channel to record: AUDIO_CHANNEL_0 or AUDIO_CHANNEL_1
+static Audio_Channel_t SYS_CONFIG_CHANNEL_TO_USE_FOR_MONO_MODE = AUDIO_CHANNEL_0;
 
-// comment of uncomment mono/stereo variations to add them to the test
-// const Wave_Header_Num_Channels_t sys_num_channel_variations_to_test[] = {
-//     WAVE_HEADER_MONO,
-//     WAVE_HEADER_STEREO,
-// };
-
-// const uint32_t SYS_CONFIG_NUM_CHANNEL_VARIATIONS_TO_TEST = sizeof(sys_num_channel_variations_to_test) / sizeof(sys_num_channel_variations_to_test)[0];
-const uint32_t SYS_CONFIG_NUM_CHANNEL = WAVE_HEADER_MONO;
-
-
-// in mono mode, we only record one channel, choose it here
-const Audio_Channel_t SYS_CONFIG_CHANNEL_TO_USE_FOR_MONO_MODE = AUDIO_CHANNEL_0;
+/* Fixed configuration (not overridable via schedule.sch) ------------------------------------------------------------*/
 
 // gain is shared by both mics
-const Audio_Gain_t SYS_CONFIG_AUDIO0_GAIN = AUDIO_GAIN_40dB;
-const Audio_Gain_t SYS_CONFIG_AUDIO1_GAIN = AUDIO_GAIN_40dB;
+static const Audio_Gain_t SYS_CONFIG_AUDIO0_GAIN = AUDIO_GAIN_40dB;
+static const Audio_Gain_t SYS_CONFIG_AUDIO1_GAIN = AUDIO_GAIN_40dB;
 
-// choose one SD card slot to use
-const SD_Card_Bank_Card_Slot_t SYS_CONFIG_SD_CARD_SLOT_TO_USE = SD_CARD_BANK_CARD_SLOT_0;
-
+// SD card slot to use for recording
+static const SD_Card_Bank_Card_Slot_t SYS_CONFIG_SD_CARD_SLOT_TO_USE = SD_CARD_BANK_CARD_SLOT_0;
 
 #endif /* SYS_CONFIG_H_ */

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "mxc_delay.h"
 
@@ -20,6 +21,8 @@
 #include "sd_card.h"
 #include "sd_card_bank_ctl.h"
 #include "wav_header.h"
+
+#define SYS_CONFIG_ALLOW_INCLUDE
 #include "system_config.h"
 
 #include "bsp_pushbutton.h"
@@ -93,6 +96,13 @@ static uint32_t get_internal_RTC_time(void *buff, void *strbuff);
 static int setup_session_folder(void);
 static int setup_day_folder(int year, int month, int day, uint32_t sample_rate, uint32_t bit_depth, uint32_t num_channels);
 
+// Schedule file loading function
+static int load_schedule_from_slot5(void);
+
+// SD card slot selection with space checking
+static SD_Card_Bank_Card_Slot_t find_available_sd_slot(uint32_t required_bytes);
+static uint64_t calculate_wav_file_size(uint32_t sample_rate, uint32_t bits_per_sample, uint32_t num_channels, uint32_t duration_s);
+
 
 //#define FIRST_SET_RTC 1    //uncomment this to set the clock time in the setup_realtimeclock()
 
@@ -102,6 +112,10 @@ char savedFileName[64] = DEFAULT_FILENAME;  // Increased size for longer paths
 // Session folder management
 static bool isFirstRecordingAfterBoot = true;
 static char currentSessionFolder[32] = "";   // e.g., "MAG000001_000"
+
+// SD card slot tracking - starts at slot 0, never goes back up after moving to next slot
+static int currentMinSlotNumber = 0;  // Minimum slot number to start searching from (0-5)
+static int lastUsedSlotNumber = -1;   // Track which slot was last used (-1 = none yet)
 static char currentDayFolder[96] = "";       // e.g., "MAG000001_000/20251125_48kHz_16bit_CH01"
 static int currentDayOfYear = -1;            // Track current day to detect day changes
 static uint32_t currentSampleRateKHz = 0;    // Track current sample rate to detect changes
@@ -171,6 +185,9 @@ int main(void)
     
     // Sync internal RTC to DS3231 at startup
     sync_RTC_to_DS3231();
+
+    // Load schedule configuration from SD slot 5 (if available)
+    load_schedule_from_slot5();
 
     printf("\n\n==================================\n");
     printf("   Cornell Lab of Ornithology     \n");
@@ -253,6 +270,7 @@ int main(void)
                                
 
             //re-enable button (this is for checking a stop in the middle of recording)
+            printf("[INFO]--> Re-enabling pushbutton (before recording)...\n");
             pushbuttons_init();
             setup_user_pushbutton_interrupt();
 
@@ -289,6 +307,7 @@ int main(void)
             printf("Recording Done ...\n");    
             
             //re-enable button (this is for the next recording)
+            printf("[INFO]--> Re-enabling pushbutton (after recording)...\n");
             pushbuttons_init();
             setup_user_pushbutton_interrupt();
 
@@ -802,18 +821,28 @@ void error_handler(Status_LED_Color_t color)
 
 static void setup_user_pushbutton_interrupt(void)
 {
+    printf("[INFO]--> Setting up pushbutton interrupt handler...\n");
+    
     // Configure interrupt
     MXC_GPIO_RegisterCallback(&bsp_pins_user_pushbutton_cfg, user_pushbutton_interrupt_callback, NULL);
+    printf("[INFO]-->   Callback registered\n");
 
     // Configure for falling edge detection (trigger on button press)
     MXC_GPIO_IntConfig(&bsp_pins_user_pushbutton_cfg, MXC_GPIO_INT_FALLING);
+    printf("[INFO]-->   Interrupt configured for falling edge\n");
 
     // Enable interrupt
     MXC_GPIO_EnableInt(bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
+    printf("[INFO]-->   GPIO interrupt enabled (port=%p, mask=0x%08X)\n", 
+           (void*)bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
     
     // Enable NVIC interrupt for the GPIO port (shared with DS3231)
     // Use the proper method to get the IRQ number for the GPIO port
-    NVIC_EnableIRQ(MXC_GPIO_GET_IRQ(MXC_GPIO_GET_IDX(bsp_pins_user_pushbutton_cfg.port)));
+    IRQn_Type irq = MXC_GPIO_GET_IRQ(MXC_GPIO_GET_IDX(bsp_pins_user_pushbutton_cfg.port));
+    NVIC_EnableIRQ(irq);
+    printf("[INFO]-->   NVIC IRQ %d enabled\n", (int)irq);
+    
+    printf("[INFO]--> Pushbutton interrupt handler ACTIVE\n");
 }
 
 
@@ -1142,64 +1171,201 @@ static void power_off_audio_chain(void)
     bsp_power_off_LDOs();
 }
 
-static void start_recording(uint8_t number_of_channel, 
-    Audio_Sample_Rate_t rate, Audio_Bits_Per_Sample_t bit, 
+/**
+ * @brief Calculate the expected WAV file size in bytes
+ * @param sample_rate Sample rate in Hz
+ * @param bits_per_sample Bit depth (16 or 24)
+ * @param num_channels Number of channels (1 for mono, 2 for stereo)
+ * @param duration_s Duration in seconds
+ * @return Expected file size in bytes (including WAV header overhead)
+ */
+static uint64_t calculate_wav_file_size(uint32_t sample_rate, uint32_t bits_per_sample, uint32_t num_channels, uint32_t duration_s)
+{
+    // Audio data size = sample_rate * (bits_per_sample / 8) * num_channels * duration
+    uint64_t audio_data_size = (uint64_t)sample_rate * (bits_per_sample / 8) * num_channels * duration_s;
+    
+    // Add WAV header size (typically ~44 bytes, but use larger estimate for metadata)
+    uint64_t header_overhead = 1024;  // Conservative estimate for header + metadata
+    
+    return audio_data_size + header_overhead;
+}
+
+/**
+ * @brief Convert slot enum to human-readable slot number (0-5)
+ * @note The enum values are reversed: SLOT_0=5, SLOT_1=4, ..., SLOT_5=0
+ */
+static int slot_enum_to_number(SD_Card_Bank_Card_Slot_t slot)
+{
+    // SLOT_0=5, SLOT_1=4, SLOT_2=3, SLOT_3=2, SLOT_4=1, SLOT_5=0
+    return 5 - (int)slot;
+}
+
+/**
+ * @brief Convert slot number (0-5) to slot enum
+ */
+static SD_Card_Bank_Card_Slot_t slot_number_to_enum(int slot_num)
+{
+    // slot_num 0 -> enum 5 (SLOT_0), slot_num 1 -> enum 4 (SLOT_1), etc.
+    return (SD_Card_Bank_Card_Slot_t)(5 - slot_num);
+}
+
+/**
+ * @brief Find an available SD card slot with enough free space
+ * @param required_bytes Minimum free space required in bytes
+ * @return The slot enum to use, or SD_CARD_BANK_ALL_SLOTS_DISABLED if no suitable slot found
+ * 
+ * @note Searches from currentMinSlotNumber to slot 5 (all slots available for recording)
+ *       Skips slots with no card inserted or insufficient space
+ *       Once a slot is skipped due to being full, we never go back to earlier slots
+ */
+static SD_Card_Bank_Card_Slot_t find_available_sd_slot(uint32_t required_bytes)
+{
+    printf("\n[INFO]--> Searching for SD card with at least %lu bytes free...\n", (unsigned long)required_bytes);
+    printf("[INFO]--> Starting search from slot %d (slots 0-%d already exhausted)\n", 
+           currentMinSlotNumber, currentMinSlotNumber > 0 ? currentMinSlotNumber - 1 : -1);
+    
+    // Search slots from currentMinSlotNumber through 5 (all slots available)
+    // Enum values: SLOT_0=5, SLOT_1=4, SLOT_2=3, SLOT_3=2, SLOT_4=1, SLOT_5=0
+    
+    for (int slot_num = currentMinSlotNumber; slot_num <= 5; slot_num++)
+    {
+        SD_Card_Bank_Card_Slot_t slot = slot_number_to_enum(slot_num);
+        
+        printf("[INFO]--> Checking slot %d (enum=%d)...\n", slot_num, (int)slot);
+        
+        // Enable the slot
+        if (sd_card_bank_ctl_enable_slot(slot) != E_NO_ERROR)
+        {
+            printf("[INFO]--> Could not enable slot %d, skipping\n", slot_num);
+            // Don't advance currentMinSlotNumber for enable failures (might be temporary)
+            continue;
+        }
+        
+        // Check if card is inserted
+        sd_card_bank_ctl_read_and_cache_detect_pins();
+        if (!sd_card_bank_ctl_active_card_is_inserted())
+        {
+            printf("[INFO]--> No card in slot %d, advancing to next slot\n", slot_num);
+            sd_card_bank_ctl_disable_all();
+            // Advance minimum slot since card is not present
+            if (slot_num >= currentMinSlotNumber)
+            {
+                currentMinSlotNumber = slot_num + 1;
+                printf("[INFO]--> Updated minimum slot to %d (slot %d has no card)\n", currentMinSlotNumber, slot_num);
+            }
+            continue;
+        }
+        
+        // Try to initialize the card
+        if (sd_card_init() != E_NO_ERROR)
+        {
+            printf("[INFO]--> Could not init card in slot %d, advancing to next slot\n", slot_num);
+            sd_card_bank_ctl_disable_all();
+            // Advance minimum slot since card failed to init
+            if (slot_num >= currentMinSlotNumber)
+            {
+                currentMinSlotNumber = slot_num + 1;
+                printf("[INFO]--> Updated minimum slot to %d (slot %d init failed)\n", currentMinSlotNumber, slot_num);
+            }
+            continue;
+        }
+        
+        MXC_Delay(100000);  // Brief delay before mount
+        
+        // Try to mount
+        if (sd_card_mount() != E_NO_ERROR)
+        {
+            printf("[INFO]--> Could not mount card in slot %d, advancing to next slot\n", slot_num);
+            sd_card_bank_ctl_disable_all();
+            // Advance minimum slot since card failed to mount
+            if (slot_num >= currentMinSlotNumber)
+            {
+                currentMinSlotNumber = slot_num + 1;
+                printf("[INFO]--> Updated minimum slot to %d (slot %d mount failed)\n", currentMinSlotNumber, slot_num);
+            }
+            continue;
+        }
+        
+        // Check free space
+        QWORD free_space = sd_card_free_space_bytes();
+        printf("[INFO]--> Slot %d free space: %llu bytes\n", slot_num, free_space);
+        
+        if (free_space >= required_bytes)
+        {
+            printf("[SUCCESS]--> Slot %d has sufficient space\n", slot_num);
+            // Leave card mounted and return this slot
+            return slot;
+        }
+        
+        printf("[INFO]--> Slot %d has insufficient space (%llu < %lu), skipping\n", 
+               slot_num, free_space, (unsigned long)required_bytes);
+        
+        // Update minimum slot to skip this full slot in future searches
+        if (slot_num >= currentMinSlotNumber)
+        {
+            currentMinSlotNumber = slot_num + 1;
+            printf("[INFO]--> Updated minimum slot to %d (slot %d is full)\n", currentMinSlotNumber, slot_num);
+        }
+        
+        // Unmount and disable before trying next slot
+        sd_card_unmount();
+        sd_card_bank_ctl_disable_all();
+    }
+    
+    printf("[ERROR]--> No suitable SD card slot found! All slots 0-5 exhausted.\n");
+    return SD_CARD_BANK_ALL_SLOTS_DISABLED;
+}
+
+static void start_recording(uint8_t number_of_channel,
+                            Audio_Sample_Rate_t rate, Audio_Bits_Per_Sample_t bit,
                             SD_Card_Bank_Card_Slot_t sd_slot, int32_t duration_s)
 {
+    // Calculate required file size
+    uint64_t required_size = calculate_wav_file_size(rate, bit, number_of_channel, duration_s);
+    printf("[INFO]--> Estimated file size: %llu bytes (%.2f MB)\n", 
+           required_size, (double)required_size / (1024.0 * 1024.0));
     
-    //power_on_audio_chain();
-
-    sd_card_bank_ctl_enable_slot(sd_slot);
-
-    sd_card_bank_ctl_read_and_cache_detect_pins();
-
-    if (!sd_card_bank_ctl_active_card_is_inserted())
+    // Find a suitable SD card slot with enough space
+    // Start from the configured slot and search forward if needed
+    SD_Card_Bank_Card_Slot_t selected_slot = find_available_sd_slot((uint32_t)required_size);
+    
+    if (selected_slot == SD_CARD_BANK_ALL_SLOTS_DISABLED)
     {
-        printf("[ERROR]--> Card at slot %d not inserted\n", sd_slot);
+        printf("[ERROR]--> No SD card with sufficient space found!\n");
         error_handler(STATUS_LED_COLOR_RED);
+        return;
     }
-    else
+    
+    int selected_slot_num = slot_enum_to_number(selected_slot);
+    printf("[SUCCESS]--> Using SD card slot %d for recording\n", selected_slot_num);
+    
+    // Check if we switched to a different SD card slot
+    bool slotChanged = (lastUsedSlotNumber != selected_slot_num);
+    if (slotChanged && lastUsedSlotNumber >= 0)
     {
-        printf("[SUCCESS]--> SD card inserted in slot %d\n", sd_slot);
+        printf("[INFO]--> Slot changed from %d to %d, resetting folder tracking\n", 
+               lastUsedSlotNumber, selected_slot_num);
+        // Reset folder tracking since we're on a different card
+        currentSessionFolder[0] = '\0';
+        currentDayFolder[0] = '\0';
+        currentDayOfYear = -1;
+        currentSampleRateKHz = 0;
+        currentBitDepth = 0;
+        currentNumChannels = 0;
     }
+    lastUsedSlotNumber = selected_slot_num;
+    
+    // Card is already mounted from find_available_sd_slot()
+    QWORD disk_size = sd_card_disk_size_bytes();
+    QWORD disk_free = sd_card_free_space_bytes();
+    printf("[INFO]--> SD card Total Space: %llu Bytes\n", disk_size);
+    printf("[INFO]--> SD card Free Space: %llu Bytes\n", disk_free);
 
-    if (sd_card_init() != E_NO_ERROR)
+    // Setup session folder on first recording after boot OR when slot changed
+    if (isFirstRecordingAfterBoot || slotChanged)
     {
-        printf("[ERROR]--> SD card init\n");
-        error_handler(STATUS_LED_COLOR_RED);
-    }
-    else
-    {
-        printf("[SUCCESS]--> SD card init\n");
-    }
-
-    // without a brief delay between card init and mount, there are often mount errors
-    MXC_Delay(100000);  // 100ms delay
-    //MXC_DELAY_MSEC(200);
-
-    int sd_card_mount_result = sd_card_mount();
-    printf("[INFO]--> SD card mount result: %d\n", sd_card_mount_result);
-
-    if (sd_card_mount() != E_NO_ERROR)
-    {
-       
-        printf("[ERROR]--> SD card mount failed.\n");
-
-        error_handler(STATUS_LED_COLOR_RED);            
-    }
-    else
-    {
-        printf("[SUCCESS]--> SD card mounted\n");
-        QWORD disk_size =  sd_card_disk_size_bytes();
-        QWORD disk_free = sd_card_free_space_bytes();
-        printf("[INFO]--> SD card Total Space: %llu Bytes\n", disk_size);
-        printf("[INFO]--> SD card Free Space: %llu Bytes\n", disk_free);
-        
-    }
-
-    // Setup session folder on first recording after boot
-    if (isFirstRecordingAfterBoot) {
-        if (setup_session_folder() != E_NO_ERROR) {
+        if (setup_session_folder() != E_NO_ERROR)
+        {
             printf("[ERROR]--> Failed to setup session folder\n");
             error_handler(STATUS_LED_COLOR_RED);
         }
@@ -1207,25 +1373,24 @@ static void start_recording(uint8_t number_of_channel,
     }
 
     Wave_Header_Attributes_t wav_attr = {
-        .num_channels =  number_of_channel,
+        .num_channels = number_of_channel,
         .sample_rate = rate,
         .bits_per_sample = bit,
     };
 
     // Setup day folder based on current date, sample rate, bit depth, and channels
-    if (setup_day_folder(ds3231_datetime.tm_year + 1900, 
-                         ds3231_datetime.tm_mon + 1, 
+    if (setup_day_folder(ds3231_datetime.tm_year + 1900,
+                         ds3231_datetime.tm_mon + 1,
                          ds3231_datetime.tm_mday,
                          wav_attr.sample_rate,
                          wav_attr.bits_per_sample,
-                         wav_attr.num_channels) != E_NO_ERROR) {
+                         wav_attr.num_channels) != E_NO_ERROR)
+    {
         printf("[ERROR]--> Failed to setup day folder\n");
         error_handler(STATUS_LED_COLOR_RED);
     }
-                         
-    write_wav_file(&wav_attr, duration_s);
-    //MXC_Delay(500000);  //Delay 500 ms 
 
+    write_wav_file(&wav_attr, duration_s);
 
     if (sd_card_unmount() != E_NO_ERROR)
     {
@@ -1236,10 +1401,11 @@ static void start_recording(uint8_t number_of_channel,
     {
         printf("[SUCCESS]--> SD card unmounted\n");
     }
+    
+    // Disable the SD card slot after recording
+    sd_card_bank_ctl_disable_all();
 
-    printf("[SUCCESS]--> All files recorded, shutting down\n");
-
-    //power_off_audio_chain();
+    printf("[SUCCESS]--> Recording complete on slot %d\n", selected_slot_num);
 }
 
 ///////////////////////////RTC SYNC FUNCTIONS ////////////////////////////////////
@@ -1471,14 +1637,25 @@ static uint32_t get_internal_RTC_time(void *buff, void *strbuff)
     struct tm_ms *timeinfo = (struct tm_ms *)buff;
     char *time_str = (char *)strbuff;
 
-
-    uint32_t sec, rtc_readout;
+    uint32_t sec, rtc_readout, subsec_readout;
     int err;
+
+    // Read subseconds first (RTC subsecond counter counts at 4096 Hz)
+    do {
+        err = MXC_RTC_GetSubSeconds(&subsec_readout);
+    } while (err != E_NO_ERROR);  //TODO: add timeout
+    
+    // Convert subseconds (0-4095) to milliseconds (0-999)
+    timeinfo->tm_subsec = (subsec_readout * 1000) / 4096;
 
     do {
         err = MXC_RTC_GetSeconds(&rtc_readout);
     } while (err != E_NO_ERROR);  //TODO: add timeout
-    sec = rtc_readout;
+    
+    // Convert total seconds to time-of-day (mod 24 hours)
+    // This prevents hours > 24 after running for multiple days
+    sec = rtc_readout % SECS_PER_DAY;
+    
     timeinfo->tm_hour = sec / SECS_PER_HR;
     sec -= timeinfo->tm_hour * SECS_PER_HR;
 
@@ -1487,11 +1664,9 @@ static uint32_t get_internal_RTC_time(void *buff, void *strbuff)
 
     timeinfo->tm_sec = sec;
 
-    timeinfo->tm_subsec += sec;
-
     // Format time as string
-    strftime(time_str, 25, "%Y-%m-%dT%H:%M:%S.2fZ", timeinfo);
-    sprintf(time_str + 19, ".%03dZ", (int)(timeinfo->tm_subsec * 1000));  
+    sprintf(time_str, "%02d:%02d:%02d.%03d", 
+            timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, timeinfo->tm_subsec);
 
     return E_NO_ERROR;
 }
@@ -1533,6 +1708,236 @@ static void print_time_with_milliseconds(void)
         strftime((char*)output_msgBuffer, OUTPUT_MSG_BUFFER_SIZE, "DS3231 RTC DateTime: %F %TZ\n\n", &ds3231_datetime);
         printf(output_msgBuffer);
     }
+}
+
+///////////////////////////SCHEDULE FILE LOADING ////////////////////////////////////
+
+/**
+ * @brief Parses a line from the schedule.sch file and extracts the value after '='
+ * @param line The line to parse
+ * @param key The key to look for (e.g., "Sampling Rate [kHz]")
+ * @param value Output buffer for the value string
+ * @param value_size Size of the value buffer
+ * @return true if key was found and value extracted, false otherwise
+ */
+static bool parse_schedule_line(const char *line, const char *key, char *value, size_t value_size)
+{
+    const char *key_pos = strstr(line, key);
+    if (key_pos == NULL) {
+        return false;
+    }
+    
+    const char *eq_pos = strchr(key_pos, '=');
+    if (eq_pos == NULL) {
+        return false;
+    }
+    
+    // Skip the '=' and any leading whitespace
+    eq_pos++;
+    while (*eq_pos == ' ' || *eq_pos == '\t') {
+        eq_pos++;
+    }
+    
+    // Copy the value, trimming trailing whitespace/newlines
+    size_t i = 0;
+    while (*eq_pos != '\0' && *eq_pos != '\r' && *eq_pos != '\n' && i < value_size - 1) {
+        value[i++] = *eq_pos++;
+    }
+    value[i] = '\0';
+    
+    // Trim trailing whitespace
+    while (i > 0 && (value[i-1] == ' ' || value[i-1] == '\t')) {
+        value[--i] = '\0';
+    }
+    
+    return true;
+}
+
+/**
+ * @brief Loads configuration from schedule.sch file on SD_CARD_BANK_CARD_SLOT_5
+ * 
+ * Schedule file format:
+ *   Sampling Rate [kHz] (24/48/96/192/384)=384
+ *   Bit Rate (16/24)=16
+ *   Mode (Mono/Stereo)=Mono
+ *   Channel (0/1)=0
+ *   Audio Duration [s]=3600
+ * 
+ * @return E_NO_ERROR if schedule loaded successfully, error code otherwise
+ *         If no schedule file found, returns E_NO_ERROR and uses defaults
+ */
+static int load_schedule_from_slot5(void)
+{
+    printf("\n[INFO]--> Checking for schedule file on SD slot 5...\n");
+    
+    // Enable slot 5
+    if (sd_card_bank_ctl_enable_slot(SYS_CONFIG_SCHEDULE_SD_SLOT) != E_NO_ERROR) {
+        printf("[INFO]--> Could not enable SD slot 5, using default config\n");
+        return E_NO_ERROR;  // Not an error, just use defaults
+    }
+    
+    // Check if card is inserted
+    sd_card_bank_ctl_read_and_cache_detect_pins();
+    if (!sd_card_bank_ctl_active_card_is_inserted()) {
+        printf("[INFO]--> No SD card in slot 5, using default config\n");
+        sd_card_bank_ctl_disable_all();
+        return E_NO_ERROR;
+    }
+    
+    // Initialize and mount the card
+    if (sd_card_init() != E_NO_ERROR) {
+        printf("[INFO]--> Could not init SD card in slot 5, using default config\n");
+        sd_card_bank_ctl_disable_all();
+        return E_NO_ERROR;
+    }
+    
+    MXC_Delay(100000);  // Brief delay before mount
+    
+    if (sd_card_mount() != E_NO_ERROR) {
+        printf("[INFO]--> Could not mount SD card in slot 5, using default config\n");
+        sd_card_bank_ctl_disable_all();
+        return E_NO_ERROR;
+    }
+    
+    // Check if schedule file exists
+    if (!sd_card_file_exists(SYS_CONFIG_SCHEDULE_FILENAME)) {
+        printf("[INFO]--> No %s file found on slot 5, using default config\n", SYS_CONFIG_SCHEDULE_FILENAME);
+        sd_card_unmount();
+        sd_card_bank_ctl_disable_all();
+        return E_NO_ERROR;
+    }
+    
+    // Open and read the schedule file
+    if (sd_card_fopen(SYS_CONFIG_SCHEDULE_FILENAME, POSIX_FILE_MODE_READ) != E_NO_ERROR) {
+        printf("[WARNING]--> Could not open %s, using default config\n", SYS_CONFIG_SCHEDULE_FILENAME);
+        sd_card_unmount();
+        sd_card_bank_ctl_disable_all();
+        return E_NO_ERROR;
+    }
+    
+    printf("[SUCCESS]--> Found %s on slot 5, loading configuration...\n", SYS_CONFIG_SCHEDULE_FILENAME);
+    
+    // Read the file content
+    static char file_buffer[512];
+    uint32_t bytes_read = 0;
+    
+    if (sd_card_fread(file_buffer, sizeof(file_buffer) - 1, &bytes_read) != E_NO_ERROR || bytes_read == 0) {
+        printf("[WARNING]--> Could not read %s, using default config\n", SYS_CONFIG_SCHEDULE_FILENAME);
+        sd_card_fclose();
+        sd_card_unmount();
+        sd_card_bank_ctl_disable_all();
+        return E_NO_ERROR;
+    }
+    
+    file_buffer[bytes_read] = '\0';  // Null terminate
+    
+    sd_card_fclose();
+    sd_card_unmount();
+    sd_card_bank_ctl_disable_all();
+    
+    // Parse the schedule file
+    char value_str[32];
+    bool config_changed = false;
+    
+    // Parse Sampling Rate [kHz]
+    if (parse_schedule_line(file_buffer, "Sampling Rate", value_str, sizeof(value_str))) {
+        int sample_rate_khz = atoi(value_str);
+        switch (sample_rate_khz) {
+            case 24:
+                SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_24kHz;
+                config_changed = true;
+                break;
+            case 48:
+                SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_48kHz;
+                config_changed = true;
+                break;
+            case 96:
+                SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_96kHz;
+                config_changed = true;
+                break;
+            case 192:
+                SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_192kHz;
+                config_changed = true;
+                break;
+            case 384:
+                SYS_CONFIG_SAMPLE_RATE = AUDIO_SAMPLE_RATE_384kHz;
+                config_changed = true;
+                break;
+            default:
+                printf("[WARNING]--> Invalid sample rate %d kHz in schedule, using default\n", sample_rate_khz);
+                break;
+        }
+        if (config_changed) {
+            printf("[CONFIG]--> Sample Rate: %lu kHz\n", (unsigned long)(SYS_CONFIG_SAMPLE_RATE / 1000));
+        }
+    }
+    
+    // Parse Bit Rate
+    if (parse_schedule_line(file_buffer, "Bit Rate", value_str, sizeof(value_str))) {
+        int bit_depth = atoi(value_str);
+        if (bit_depth == 16) {
+            SYS_CONFIG_NUM_BIT_DEPTH = AUDIO_BIT_DEPTH_16_BITS_PER_SAMPLE;
+            config_changed = true;
+            printf("[CONFIG]--> Bit Depth: 16 bits\n");
+        } else if (bit_depth == 24) {
+            SYS_CONFIG_NUM_BIT_DEPTH = AUDIO_BIT_DEPTH_24_BITS_PER_SAMPLE;
+            config_changed = true;
+            printf("[CONFIG]--> Bit Depth: 24 bits\n");
+        } else {
+            printf("[WARNING]--> Invalid bit depth %d in schedule, using default\n", bit_depth);
+        }
+    }
+    
+    // Parse Mode (Mono/Stereo)
+    if (parse_schedule_line(file_buffer, "Mode", value_str, sizeof(value_str))) {
+        if (strstr(value_str, "Mono") != NULL || strstr(value_str, "mono") != NULL) {
+            SYS_CONFIG_NUM_CHANNEL = WAVE_HEADER_MONO;
+            config_changed = true;
+            printf("[CONFIG]--> Mode: Mono\n");
+        } else if (strstr(value_str, "Stereo") != NULL || strstr(value_str, "stereo") != NULL) {
+            SYS_CONFIG_NUM_CHANNEL = WAVE_HEADER_STEREO;
+            config_changed = true;
+            printf("[CONFIG]--> Mode: Stereo\n");
+        } else {
+            printf("[WARNING]--> Invalid mode '%s' in schedule, using default\n", value_str);
+        }
+    }
+    
+    // Parse Channel (0/1) - only relevant for mono mode
+    if (parse_schedule_line(file_buffer, "Channel", value_str, sizeof(value_str))) {
+        int channel = atoi(value_str);
+        if (channel == 0) {
+            SYS_CONFIG_CHANNEL_TO_USE_FOR_MONO_MODE = AUDIO_CHANNEL_0;
+            config_changed = true;
+            printf("[CONFIG]--> Mono Channel: 0\n");
+        } else if (channel == 1) {
+            SYS_CONFIG_CHANNEL_TO_USE_FOR_MONO_MODE = AUDIO_CHANNEL_1;
+            config_changed = true;
+            printf("[CONFIG]--> Mono Channel: 1\n");
+        } else {
+            printf("[WARNING]--> Invalid channel %d in schedule, using default\n", channel);
+        }
+    }
+    
+    // Parse Audio Duration [s]
+    if (parse_schedule_line(file_buffer, "Audio Duration", value_str, sizeof(value_str))) {
+        int duration = atoi(value_str);
+        if (duration > 0 && duration <= 4000) {  // Max ~70 minutes as per original comment
+            SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS = (uint32_t)duration;
+            config_changed = true;
+            printf("[CONFIG]--> Audio Duration: %lu seconds\n", (unsigned long)SYS_CONFIG_AUDIO_FILE_LEN_IN_SECONDS);
+        } else {
+            printf("[WARNING]--> Invalid duration %d in schedule (must be 1-4000), using default\n", duration);
+        }
+    }
+    
+    if (config_changed) {
+        printf("[SUCCESS]--> Schedule configuration loaded from slot 5\n");
+    } else {
+        printf("[INFO]--> No valid configuration found in schedule file, using defaults\n");
+    }
+    
+    return E_NO_ERROR;
 }
 
 ///////////////////////////FOLDER MANAGEMENT FUNCTIONS ////////////////////////////////////
@@ -1649,12 +2054,15 @@ static int setup_day_folder(int year, int month, int day, uint32_t sample_rate, 
 
 static void user_pushbutton_interrupt_callback(void *cbdata)
 {
+    printf("[INFO]--> Pushbutton ISR triggered!\n");
+    
     // Get and clear interrupt flags
     uint32_t status = MXC_GPIO_GetFlags(bsp_pins_user_pushbutton_cfg.port);
     MXC_GPIO_ClearFlags(bsp_pins_user_pushbutton_cfg.port, status);
 
     // Disable interrupt temporarily for this specific pin only
     MXC_GPIO_DisableInt(bsp_pins_user_pushbutton_cfg.port, bsp_pins_user_pushbutton_cfg.mask);
+    printf("[INFO]--> Pushbutton interrupt DISABLED (for debounce)\n");
 
     // Don't disable the entire GPIO0 NVIC interrupt since DS3231 might need it
     // The GPIO system will handle multiple callbacks on the same port
@@ -1663,5 +2071,5 @@ static void user_pushbutton_interrupt_callback(void *cbdata)
     // Start the debounce timer which should produce "button_pressed" after some time after
     // checking the GPIO pin
     start_user_btn_debounceTimer();  //re-activate one shot timer
-    
+    printf("[INFO]--> Debounce timer started\n");
 }

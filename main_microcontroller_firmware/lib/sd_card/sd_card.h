@@ -154,6 +154,35 @@ int sd_card_fclose(void);
 int sd_card_fwrite(const void *buff, uint32_t size, uint32_t *written);
 
 /**
+ * @brief `sd_card_fread(b, s, r)` reads `s` bytes into buffer `b` from the currently mounted SD card and stores the number
+ * of bytes read in integer pointer `r`.
+ *
+ * @param buff pointer to the buffer to read into.
+ *
+ * @param size the number of bytes to read from the card.
+ *
+ * @param bytes_read pointer to an integer to store the number of bytes actually read into.
+ *
+ * @pre The SD card is mounted and a file is opened for reading.
+ *
+ * @post Bytes from the file are read into the buffer.
+ *
+ * @retval `E_NO_ERROR` if successful, else a negative error code.
+ */
+int sd_card_fread(void *buff, uint32_t size, uint32_t *bytes_read);
+
+/**
+ * @brief `sd_card_file_exists(f)` checks if a file exists at path `f`.
+ *
+ * @param file_name the path to check.
+ *
+ * @pre The SD card is mounted.
+ *
+ * @retval true if file exists, false otherwise.
+ */
+bool sd_card_file_exists(const char *file_name);
+
+/**
  * @brief `sd_card_lseek(o)` offsets the file pointer `o` bytes from the top of the currently opened file.
  *
  * @param offset the number of bytes to offset from the top of the file.
